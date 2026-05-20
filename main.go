@@ -26,7 +26,7 @@ func main() {
 	cfg := parseFlags()
 
 	if len(flag.Args()) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: sigrets get [stackName.secretName]")
+		fmt.Fprintln(os.Stderr, "usage: sigrets get [stackName.{o|c}.secretName]")
 		os.Exit(1)
 	}
 
@@ -99,7 +99,7 @@ func runTUI(ctx context.Context, s3 *store.S3Store) {
 }
 
 func runDirect(ctx context.Context, s3 *store.S3Store, project, arg string) {
-	stackName, secretName, err := parseGetArg(arg)
+	stackName, source, secretName, err := parseGetArg(arg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -148,8 +148,31 @@ func runDirect(ctx context.Context, s3 *store.S3Store, project, arg string) {
 		os.Exit(1)
 	}
 
-	secrets := state.ExtractOutputSecrets(stackState)
-	for _, s := range secrets {
+	var candidates []state.Secret
+
+	switch source {
+	case "output":
+		candidates = state.ExtractOutputSecrets(stackState)
+	case "config":
+		histKey := s3.LatestHistoryKey(ctx, project, stackName)
+		if histKey == "" {
+			fmt.Fprintln(os.Stderr, "no history file found for stack")
+			os.Exit(1)
+		}
+		histData, err := s3.ReadBytes(ctx, histKey)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		hist, err := state.ParseHistoryRecord(histData)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		candidates = state.ExtractHistorySecrets(hist)
+	}
+
+	for _, s := range candidates {
 		if s.Name == secretName {
 			printSecret(decr, s)
 			return
@@ -172,12 +195,22 @@ func printSecret(decr *crypto.Decryptor, s state.Secret) {
 	fmt.Print(plaintext)
 }
 
-func parseGetArg(arg string) (stackName, secretName string, err error) {
-	parts := strings.SplitN(arg, ".", 2)
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("invalid path %q: expected stackName.secretName", arg)
+func parseGetArg(arg string) (stackName, source, secretName string, err error) {
+	parts := strings.SplitN(arg, ".", 3)
+	if len(parts) != 3 {
+		return "", "", "", fmt.Errorf("invalid path %q: expected stackName.{o|c}.secretName", arg)
 	}
-	return parts[0], parts[1], nil
+	stackName = parts[0]
+	secretName = parts[2]
+	switch strings.ToLower(parts[1]) {
+	case "o", "out", "output":
+		source = "output"
+	case "c", "cfg", "config":
+		source = "config"
+	default:
+		return "", "", "", fmt.Errorf("invalid source %q: use o/out/output or c/cfg/config", parts[1])
+	}
+	return
 }
 
 func extractCloudState(stackState *state.StackState) (state.CloudSecretsState, error) {

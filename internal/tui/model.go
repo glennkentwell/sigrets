@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,6 +23,7 @@ const (
 	screenProjects
 	screenStacks
 	screenSecrets
+	screenDetail
 )
 
 type projectItem struct{ name string }
@@ -44,7 +47,7 @@ func (i secretItem) Title() string {
 	}
 	return label + " " + i.secret.Name
 }
-func (i secretItem) Description() string { return dimStyle.Render("press enter to decrypt") }
+func (i secretItem) Description() string { return dimStyle.Render("press enter to view") }
 func (i secretItem) FilterValue() string  { return i.secret.Name }
 
 type loadProjectsMsg struct {
@@ -63,6 +66,13 @@ type loadSecretsMsg struct {
 	err     error
 }
 
+type decryptedMsg struct {
+	plaintext string
+	err       error
+}
+
+type clipboardMsg struct{ err error }
+
 type Model struct {
 	ctx             context.Context
 	s3              *store.S3Store
@@ -73,6 +83,11 @@ type Model struct {
 	stacks          list.Model
 	secrets         list.Model
 	selectedProject string
+	selectedStack   string
+	selectedSecret  *state.Secret
+	plaintext       string
+	revealed        bool
+	copied          bool
 	decr            *crypto.Decryptor
 	result          string
 	err             error
@@ -131,8 +146,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
 			return m, tea.Quit
+		case "q":
+			if m.screen != screenDetail {
+				return m, tea.Quit
+			}
 		case "esc", "b":
 			switch m.screen {
 			case screenStacks:
@@ -140,6 +159,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case screenSecrets:
 				m.screen = screenStacks
+				return m, nil
+			case screenDetail:
+				m.screen = screenSecrets
+				m.revealed = false
+				m.copied = false
+				m.plaintext = ""
+				m.selectedSecret = nil
+				return m, nil
+			}
+		case " ", "v":
+			if m.screen == screenDetail {
+				m.revealed = !m.revealed
+				return m, nil
+			}
+		case "y":
+			if m.screen == screenDetail && m.plaintext != "" {
+				err := clipboard.WriteAll(m.plaintext)
+				m.copied = err == nil
 				return m, nil
 			}
 		case "enter":
@@ -159,6 +196,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !ok {
 					return m, nil
 				}
+				m.selectedStack = sel.info.Name
 				m.loadingMsg = fmt.Sprintf("Decrypting secrets for %s…", sel.info.Name)
 				m.screen = screenLoading
 				return m, tea.Batch(m.spinner.Tick, m.loadSecretsCmd(sel.info))
@@ -168,16 +206,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !ok {
 					return m, nil
 				}
-				if sel.secret.Ciphertext == "" {
-					m.result = sel.secret.Value
-					return m, tea.Quit
+				s := sel.secret
+				m.selectedSecret = &s
+				m.revealed = false
+				m.copied = false
+				if s.Ciphertext == "" {
+					m.plaintext = s.Value
+				} else {
+					plaintext, err := m.decr.Decrypt(s.Ciphertext)
+					if err != nil {
+						m.err = err
+						return m, tea.Quit
+					}
+					m.plaintext = plaintext
 				}
-				plaintext, err := m.decr.Decrypt(sel.secret.Ciphertext)
-				if err != nil {
-					m.err = err
-					return m, tea.Quit
-				}
-				m.result = plaintext
+				m.screen = screenDetail
+				return m, nil
+
+			case screenDetail:
+				m.result = m.plaintext
 				return m, tea.Quit
 			}
 		}
@@ -227,6 +274,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.secrets.SetItems(items)
 		m.secrets.SetSize(m.width, m.height)
+		m.secrets.Title = "Select a secret  " + dimStyle.Render("("+m.selectedStack+")")
 		m.screen = screenSecrets
 		return m, nil
 	}
@@ -257,20 +305,96 @@ func (m Model) View() string {
 
 	switch m.screen {
 	case screenLoading:
-		return wrap.Render(
-			m.spinner.View() + " " + loadingStyle.Render(m.loadingMsg),
-		)
+		return wrap.Render(m.spinner.View() + " " + loadingStyle.Render(m.loadingMsg))
 	case screenProjects:
 		return wrap.Render(m.projects.View() + "\n" + help)
 	case screenStacks:
 		return wrap.Render(m.stacks.View() + "\n" + help)
-	default:
+	case screenSecrets:
 		return wrap.Render(m.secrets.View() + "\n" + help)
+	case screenDetail:
+		return wrap.Render(m.viewDetail())
 	}
+	return ""
+}
+
+func (m Model) viewDetail() string {
+	s := m.selectedSecret
+
+	sourceShort := "o"
+	if s.Source == "config" {
+		sourceShort = "c"
+	}
+	path := m.selectedStack + "." + sourceShort + "." + s.Name
+
+	valueWidth := m.width - 8
+	if valueWidth < 20 {
+		valueWidth = 20
+	}
+
+	var valueRow string
+	if m.revealed {
+		wrapped := wrapString(m.plaintext, valueWidth)
+		valueRow = revealedValueStyle.Render(wrapped)
+	} else {
+		dots := strings.Repeat("●", min(len(m.plaintext), 32))
+		valueRow = hiddenValueStyle.Render(dots)
+	}
+
+	eyeHint := "👁  space/v — reveal"
+	if m.revealed {
+		eyeHint = "👁  space/v — hide"
+	}
+
+	copiedNote := ""
+	if m.copied {
+		copiedNote = "  " + copiedStyle.Render("✓ copied")
+	}
+
+	card := lipgloss.JoinVertical(lipgloss.Left,
+		detailLabelStyle.Render("path"),
+		pathStyle.Render(path),
+		"",
+		detailLabelStyle.Render("value"),
+		valueRow,
+		"",
+		dimStyle.Render(eyeHint),
+		dimStyle.Render("y — copy to clipboard"+copiedNote),
+		dimStyle.Render("enter — print & exit"),
+		dimStyle.Render("esc — back"),
+	)
+
+	cardWidth := m.width - 4
+	if cardWidth < 40 {
+		cardWidth = 40
+	}
+
+	return detailCardStyle.Width(cardWidth).Render(card)
 }
 
 func (m Model) Result() string { return m.result }
 func (m Model) Err() error     { return m.err }
+
+func wrapString(s string, width int) string {
+	if len(s) <= width {
+		return s
+	}
+	var b strings.Builder
+	for len(s) > width {
+		b.WriteString(s[:width])
+		b.WriteByte('\n')
+		s = s[width:]
+	}
+	b.WriteString(s)
+	return b.String()
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 func (m Model) listProjectsCmd() tea.Cmd {
 	return func() tea.Msg {
