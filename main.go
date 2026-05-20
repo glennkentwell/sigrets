@@ -37,7 +37,7 @@ func main() {
 
 	ctx := context.Background()
 
-	s3, err := store.NewS3Store(ctx, cfg.bucket, cfg.project, cfg.region, cfg.profile)
+	s3, err := store.NewS3Store(ctx, cfg.bucket, cfg.region, cfg.profile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -49,29 +49,25 @@ func main() {
 		return
 	}
 
-	runDirect(ctx, s3, flag.Arg(1))
+	if cfg.project == "" {
+		fmt.Fprintln(os.Stderr, "error: --project is required for direct get (or omit the path argument to use the TUI)")
+		os.Exit(1)
+	}
+	runDirect(ctx, s3, cfg.project, flag.Arg(1))
 }
 
 func parseFlags() config {
 	var cfg config
 
-	flag.StringVar(&cfg.bucket, "bucket", os.Getenv("SIGRETS_BUCKET"), "S3 bucket name")
-	flag.StringVar(&cfg.bucket, "b", os.Getenv("SIGRETS_BUCKET"), "S3 bucket name (shorthand)")
-	flag.StringVar(&cfg.project, "project", os.Getenv("SIGRETS_PROJECT"), "Pulumi project path prefix in bucket")
+	const defaultBucket = "my-pulumi-state"
+	flag.StringVar(&cfg.bucket, "bucket", envOrDefault("SIGRETS_BUCKET", defaultBucket), "S3 bucket name")
+	flag.StringVar(&cfg.bucket, "b", envOrDefault("SIGRETS_BUCKET", defaultBucket), "S3 bucket name (shorthand)")
+	flag.StringVar(&cfg.project, "project", os.Getenv("SIGRETS_PROJECT"), "Pulumi project path prefix (optional for TUI)")
 	flag.StringVar(&cfg.project, "p", os.Getenv("SIGRETS_PROJECT"), "Pulumi project path prefix (shorthand)")
 	flag.StringVar(&cfg.region, "region", envOrDefault("SIGRETS_REGION", envOrDefault("AWS_DEFAULT_REGION", "ap-southeast-2")), "AWS region")
 	flag.StringVar(&cfg.region, "r", envOrDefault("SIGRETS_REGION", envOrDefault("AWS_DEFAULT_REGION", "ap-southeast-2")), "AWS region (shorthand)")
 	flag.StringVar(&cfg.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS named profile")
 	flag.Parse()
-
-	if cfg.bucket == "" {
-		fmt.Fprintln(os.Stderr, "error: --bucket is required (or set SIGRETS_BUCKET)")
-		os.Exit(1)
-	}
-	if cfg.project == "" {
-		fmt.Fprintln(os.Stderr, "error: --project is required (or set SIGRETS_PROJECT)")
-		os.Exit(1)
-	}
 
 	return cfg
 }
@@ -84,17 +80,17 @@ func envOrDefault(key, def string) string {
 }
 
 func runTUI(ctx context.Context, s3 *store.S3Store) {
-	stacks, err := s3.ListStacks(ctx)
+	projects, err := s3.ListProjects(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if len(stacks) == 0 {
-		fmt.Fprintln(os.Stderr, "no stacks found")
+	if len(projects) == 0 {
+		fmt.Fprintln(os.Stderr, "no projects found in bucket")
 		os.Exit(1)
 	}
 
-	m := tui.New(ctx, s3, stacks)
+	m := tui.New(ctx, s3, projects)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
@@ -112,14 +108,14 @@ func runTUI(ctx context.Context, s3 *store.S3Store) {
 	}
 }
 
-func runDirect(ctx context.Context, s3 *store.S3Store, arg string) {
+func runDirect(ctx context.Context, s3 *store.S3Store, project, arg string) {
 	stackName, source, secretName, err := parseGetArg(arg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	stacks, err := s3.ListStacks(ctx)
+	stacks, err := s3.ListStacks(ctx, project)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

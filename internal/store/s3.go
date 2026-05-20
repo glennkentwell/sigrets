@@ -10,8 +10,7 @@ import (
 )
 
 type S3Store struct {
-	bucket  *blob.Bucket
-	project string
+	bucket *blob.Bucket
 }
 
 type StackInfo struct {
@@ -20,7 +19,7 @@ type StackInfo struct {
 	ConfigKey string
 }
 
-func NewS3Store(ctx context.Context, bucketName, project, region, profile string) (*S3Store, error) {
+func NewS3Store(ctx context.Context, bucketName, region, profile string) (*S3Store, error) {
 	url := fmt.Sprintf("s3://%s?region=%s&awssdk=v2", bucketName, region)
 	if profile != "" {
 		url += "&profile=" + profile
@@ -29,15 +28,42 @@ func NewS3Store(ctx context.Context, bucketName, project, region, profile string
 	if err != nil {
 		return nil, fmt.Errorf("opening s3 bucket %s: %w", bucketName, err)
 	}
-	return &S3Store{bucket: b, project: project}, nil
+	return &S3Store{bucket: b}, nil
 }
 
 func (s *S3Store) Close() error {
 	return s.bucket.Close()
 }
 
-func (s *S3Store) ListStacks(ctx context.Context) ([]StackInfo, error) {
-	prefix := s.project + "/.pulumi/stacks/"
+func (s *S3Store) ListProjects(ctx context.Context) ([]string, error) {
+	iter := s.bucket.List(nil)
+	seen := map[string]struct{}{}
+	var projects []string
+	for {
+		obj, err := iter.Next(ctx)
+		if err != nil {
+			break
+		}
+		const marker = "/.pulumi/stacks/"
+		idx := strings.Index(obj.Key, marker)
+		if idx < 0 {
+			continue
+		}
+		suffix := obj.Key[idx+len(marker):]
+		if !strings.HasSuffix(suffix, ".json") || strings.HasSuffix(suffix, ".json.bak") {
+			continue
+		}
+		project := obj.Key[:idx]
+		if _, ok := seen[project]; !ok {
+			seen[project] = struct{}{}
+			projects = append(projects, project)
+		}
+	}
+	return projects, nil
+}
+
+func (s *S3Store) ListStacks(ctx context.Context, project string) ([]StackInfo, error) {
+	prefix := project + "/.pulumi/stacks/"
 	iter := s.bucket.List(&blob.ListOptions{Prefix: prefix})
 
 	var stacks []StackInfo
@@ -55,7 +81,7 @@ func (s *S3Store) ListStacks(ctx context.Context) ([]StackInfo, error) {
 		stacks = append(stacks, StackInfo{
 			Name:      name,
 			StateKey:  key,
-			ConfigKey: s.project + "/Pulumi." + name + ".yaml",
+			ConfigKey: project + "/Pulumi." + name + ".yaml",
 		})
 	}
 	return stacks, nil
