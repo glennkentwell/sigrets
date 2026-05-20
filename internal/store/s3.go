@@ -56,7 +56,7 @@ func (s *S3Store) ListProjects(ctx context.Context) ([]string, error) {
 
 func (s *S3Store) ListStacks(ctx context.Context, project string) ([]StackInfo, error) {
 	prefix := project + "/.pulumi/stacks/"
-	iter := s.bucket.List(&blob.ListOptions{Prefix: prefix})
+	iter := s.bucket.List(&blob.ListOptions{Prefix: prefix, Delimiter: "/"})
 
 	var stacks []StackInfo
 	for {

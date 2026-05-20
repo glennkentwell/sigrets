@@ -418,19 +418,38 @@ func (m Model) loadStacksCmd(project string) tea.Cmd {
 
 func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
 	return func() tea.Msg {
-		stateData, err := m.s3.ReadState(m.ctx, info.StateKey)
-		if err != nil {
-			return loadSecretsMsg{err: err}
+		type stateResult struct {
+			data []byte
+			err  error
+		}
+		type histResult struct {
+			key string
 		}
 
-		stackState, err := state.ParseStackState(stateData)
+		stateCh := make(chan stateResult, 1)
+		histCh := make(chan histResult, 1)
+
+		go func() {
+			data, err := m.s3.ReadState(m.ctx, info.StateKey)
+			stateCh <- stateResult{data, err}
+		}()
+		go func() {
+			histCh <- histResult{m.s3.LatestHistoryKey(m.ctx, m.selectedProject, info.Name)}
+		}()
+
+		sr := <-stateCh
+		if sr.err != nil {
+			return loadSecretsMsg{err: sr.err}
+		}
+
+		stackState, err := state.ParseStackState(sr.data)
 		if err != nil {
 			return loadSecretsMsg{err: err}
 		}
 
 		secrets := state.ExtractOutputSecrets(stackState)
 
-		if histKey := m.s3.LatestHistoryKey(m.ctx, m.selectedProject, info.Name); histKey != "" {
+		if histKey := (<-histCh).key; histKey != "" {
 			if histData, err := m.s3.ReadBytes(m.ctx, histKey); err == nil {
 				if hist, err := state.ParseHistoryRecord(histData); err == nil {
 					secrets = append(secrets, state.ExtractHistorySecrets(hist)...)
