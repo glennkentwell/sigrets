@@ -92,3 +92,27 @@ func (s *S3Store) ReadState(ctx context.Context, stateKey string) ([]byte, error
 	}
 	return data, nil
 }
+
+func (s *S3Store) LatestHistoryKey(ctx context.Context, project, stack string) string {
+	prefix := project + "/.pulumi/history/" + stack + "/"
+	iter := s.bucket.List(&blob.ListOptions{Prefix: prefix})
+	latest := ""
+	for {
+		obj, err := iter.Next(ctx)
+		if err != nil {
+			break
+		}
+		if strings.HasSuffix(obj.Key, ".history.json") {
+			latest = obj.Key
+		}
+	}
+	return latest
+}
+
+func (s *S3Store) ReadBytes(ctx context.Context, key string) ([]byte, error) {
+	data, err := s.bucket.ReadAll(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", key, err)
+	}
+	return data, nil
+}

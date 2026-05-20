@@ -61,16 +61,18 @@ type loadSecretsMsg struct {
 }
 
 type Model struct {
-	ctx            context.Context
-	s3             *store.S3Store
-	screen         screen
-	projects       list.Model
-	stacks         list.Model
-	secrets        list.Model
+	ctx             context.Context
+	s3              *store.S3Store
+	screen          screen
+	projects        list.Model
+	stacks          list.Model
+	secrets         list.Model
 	selectedProject string
-	decr           *crypto.Decryptor
-	result         string
-	err            error
+	decr            *crypto.Decryptor
+	result          string
+	err             error
+	width           int
+	height          int
 }
 
 func New(ctx context.Context, s3 *store.S3Store, projects []string) Model {
@@ -107,9 +109,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		h, v := lipgloss.NewStyle().Margin(1, 2).GetFrameSize()
-		m.projects.SetSize(msg.Width-h, msg.Height-v)
-		m.stacks.SetSize(msg.Width-h, msg.Height-v)
-		m.secrets.SetSize(msg.Width-h, msg.Height-v)
+		m.width = msg.Width - h
+		m.height = msg.Height - v
+		m.projects.SetSize(m.width, m.height)
+		m.stacks.SetSize(m.width, m.height)
+		m.secrets.SetSize(m.width, m.height)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -171,6 +175,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = stackItem{s}
 		}
 		m.stacks.SetItems(items)
+		m.stacks.SetSize(m.width, m.height)
 		m.stacks.Title = "Select a stack  " + dimStyle.Render("("+m.selectedProject+")")
 		m.screen = screenStacks
 		return m, nil
@@ -186,6 +191,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = secretItem{s}
 		}
 		m.secrets.SetItems(items)
+		m.secrets.SetSize(m.width, m.height)
 		m.screen = screenSecrets
 		return m, nil
 	}
@@ -248,6 +254,14 @@ func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
 		}
 
 		secrets := state.ExtractOutputSecrets(stackState)
+
+		if histKey := m.s3.LatestHistoryKey(m.ctx, m.selectedProject, info.Name); histKey != "" {
+			if histData, err := m.s3.ReadBytes(m.ctx, histKey); err == nil {
+				if hist, err := state.ParseHistoryRecord(histData); err == nil {
+					secrets = append(secrets, state.ExtractHistorySecrets(hist)...)
+				}
+			}
+		}
 
 		cloudState, err := extractCloudState(stackState)
 		if err != nil {
