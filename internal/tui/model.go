@@ -249,14 +249,6 @@ func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
 
 		secrets := state.ExtractOutputSecrets(stackState)
 
-		if m.s3.HasConfig(m.ctx, info.ConfigKey) {
-			if cfgData, err := m.s3.ReadConfig(m.ctx, info.ConfigKey); err == nil {
-				if cfg, err := state.ParseStackConfig(cfgData); err == nil {
-					secrets = append(secrets, state.ExtractConfigSecrets(cfg)...)
-				}
-			}
-		}
-
 		cloudState, err := extractCloudState(stackState)
 		if err != nil {
 			return loadSecretsMsg{err: err}

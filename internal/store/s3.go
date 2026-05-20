@@ -14,9 +14,8 @@ type S3Store struct {
 }
 
 type StackInfo struct {
-	Name      string
-	StateKey  string
-	ConfigKey string
+	Name     string
+	StateKey string
 }
 
 func NewS3Store(ctx context.Context, bucketName, region, profile string) (*S3Store, error) {
@@ -79,9 +78,8 @@ func (s *S3Store) ListStacks(ctx context.Context, project string) ([]StackInfo, 
 		name := strings.TrimPrefix(key, prefix)
 		name = strings.TrimSuffix(name, ".json")
 		stacks = append(stacks, StackInfo{
-			Name:      name,
-			StateKey:  key,
-			ConfigKey: project + "/Pulumi." + name + ".yaml",
+			Name:     name,
+			StateKey: key,
 		})
 	}
 	return stacks, nil
@@ -93,17 +91,4 @@ func (s *S3Store) ReadState(ctx context.Context, stateKey string) ([]byte, error
 		return nil, fmt.Errorf("reading state %s: %w", stateKey, err)
 	}
 	return data, nil
-}
-
-func (s *S3Store) ReadConfig(ctx context.Context, configKey string) ([]byte, error) {
-	data, err := s.bucket.ReadAll(ctx, configKey)
-	if err != nil {
-		return nil, fmt.Errorf("reading config %s: %w", configKey, err)
-	}
-	return data, nil
-}
-
-func (s *S3Store) HasConfig(ctx context.Context, configKey string) bool {
-	exists, _ := s.bucket.Exists(ctx, configKey)
-	return exists
 }

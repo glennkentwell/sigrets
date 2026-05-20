@@ -26,7 +26,7 @@ func main() {
 	cfg := parseFlags()
 
 	if len(flag.Args()) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: sigrets get [stackName.{output|out|o|config|cfg|c}.secretName]")
+		fmt.Fprintln(os.Stderr, "usage: sigrets get [stackName.secretName]")
 		os.Exit(1)
 	}
 
@@ -109,7 +109,7 @@ func runTUI(ctx context.Context, s3 *store.S3Store) {
 }
 
 func runDirect(ctx context.Context, s3 *store.S3Store, project, arg string) {
-	stackName, source, secretName, err := parseGetArg(arg)
+	stackName, secretName, err := parseGetArg(arg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -158,43 +158,15 @@ func runDirect(ctx context.Context, s3 *store.S3Store, project, arg string) {
 		os.Exit(1)
 	}
 
-	switch source {
-	case "output":
-		secrets := state.ExtractOutputSecrets(stackState)
-		for _, s := range secrets {
-			if s.Name == secretName {
-				printSecret(decr, s)
-				return
-			}
+	secrets := state.ExtractOutputSecrets(stackState)
+	for _, s := range secrets {
+		if s.Name == secretName {
+			printSecret(decr, s)
+			return
 		}
-		fmt.Fprintf(os.Stderr, "secret not found: %s\n", arg)
-		os.Exit(1)
-
-	case "config":
-		if !s3.HasConfig(ctx, target.ConfigKey) {
-			fmt.Fprintln(os.Stderr, "no config file found for stack")
-			os.Exit(1)
-		}
-		cfgData, err := s3.ReadConfig(ctx, target.ConfigKey)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		cfg, err := state.ParseStackConfig(cfgData)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		secrets := state.ExtractConfigSecrets(cfg)
-		for _, s := range secrets {
-			if s.Name == secretName || strings.HasSuffix(s.Name, ":"+secretName) {
-				printSecret(decr, s)
-				return
-			}
-		}
-		fmt.Fprintf(os.Stderr, "secret not found: %s\n", arg)
-		os.Exit(1)
 	}
+	fmt.Fprintf(os.Stderr, "secret not found: %s\n", arg)
+	os.Exit(1)
 }
 
 func printSecret(decr *crypto.Decryptor, s state.Secret) {
@@ -210,24 +182,12 @@ func printSecret(decr *crypto.Decryptor, s state.Secret) {
 	fmt.Print(plaintext)
 }
 
-func parseGetArg(arg string) (stackName, source, secretName string, err error) {
-	parts := strings.SplitN(arg, ".", 3)
-	if len(parts) != 3 {
-		return "", "", "", fmt.Errorf("invalid path %q: expected stackName.{output|out|o|config|cfg|c}.secretName", arg)
+func parseGetArg(arg string) (stackName, secretName string, err error) {
+	parts := strings.SplitN(arg, ".", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid path %q: expected stackName.secretName", arg)
 	}
-
-	stackName = parts[0]
-	secretName = parts[2]
-
-	switch strings.ToLower(parts[1]) {
-	case "output", "out", "o":
-		source = "output"
-	case "config", "cfg", "c":
-		source = "config"
-	default:
-		return "", "", "", fmt.Errorf("invalid source %q: use output/out/o or config/cfg/c", parts[1])
-	}
-	return
+	return parts[0], parts[1], nil
 }
 
 func extractCloudState(stackState *state.StackState) (state.CloudSecretsState, error) {
