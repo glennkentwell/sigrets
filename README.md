@@ -4,6 +4,10 @@ Read Pulumi secrets from S3 state without the Pulumi CLI.
 
 ## Install
 
+Download a binary from the [Release](https://github.com/glennkentwell/sigrets/releases) page and put it in your `$PATH`.
+
+Or, if you have `go` installed:
+
 ```bash
 go install glenn.io/sigrets@latest
 ```
