@@ -80,17 +80,7 @@ func envOrDefault(key, def string) string {
 }
 
 func runTUI(ctx context.Context, s3 *store.S3Store) {
-	projects, err := s3.ListProjects(ctx)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	if len(projects) == 0 {
-		fmt.Fprintln(os.Stderr, "no projects found in bucket")
-		os.Exit(1)
-	}
-
-	m := tui.New(ctx, s3, projects)
+	m := tui.New(ctx, s3)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {

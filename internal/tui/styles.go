@@ -26,4 +26,10 @@ var (
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
 			MarginTop(1)
+
+	spinnerStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("205"))
+
+	loadingStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252"))
 )

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"glenn.io/sigrets/internal/crypto"
@@ -16,12 +17,11 @@ import (
 type screen int
 
 const (
-	screenProjects screen = iota
+	screenLoading screen = iota
+	screenProjects
 	screenStacks
 	screenSecrets
 )
-
-// list.Item implementations
 
 type projectItem struct{ name string }
 
@@ -47,7 +47,10 @@ func (i secretItem) Title() string {
 func (i secretItem) Description() string { return dimStyle.Render("press enter to decrypt") }
 func (i secretItem) FilterValue() string  { return i.secret.Name }
 
-// async messages
+type loadProjectsMsg struct {
+	projects []string
+	err      error
+}
 
 type loadStacksMsg struct {
 	stacks []store.StackInfo
@@ -64,6 +67,8 @@ type Model struct {
 	ctx             context.Context
 	s3              *store.S3Store
 	screen          screen
+	loadingMsg      string
+	spinner         spinner.Model
 	projects        list.Model
 	stacks          list.Model
 	secrets         list.Model
@@ -75,13 +80,12 @@ type Model struct {
 	height          int
 }
 
-func New(ctx context.Context, s3 *store.S3Store, projects []string) Model {
-	items := make([]list.Item, len(projects))
-	for i, p := range projects {
-		items[i] = projectItem{p}
-	}
+func New(ctx context.Context, s3 *store.S3Store) Model {
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = spinnerStyle
 
-	projectList := list.New(items, list.NewDefaultDelegate(), 0, 0)
+	projectList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	projectList.Title = "Select a project"
 	projectList.Styles.Title = titleStyle
 
@@ -94,16 +98,20 @@ func New(ctx context.Context, s3 *store.S3Store, projects []string) Model {
 	secretList.Styles.Title = titleStyle
 
 	return Model{
-		ctx:      ctx,
-		s3:       s3,
-		screen:   screenProjects,
-		projects: projectList,
-		stacks:   stackList,
-		secrets:  secretList,
+		ctx:        ctx,
+		s3:         s3,
+		screen:     screenLoading,
+		loadingMsg: "Scanning bucket for projects…",
+		spinner:    sp,
+		projects:   projectList,
+		stacks:     stackList,
+		secrets:    secretList,
 	}
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Tick, m.listProjectsCmd())
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -115,6 +123,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stacks.SetSize(m.width, m.height)
 		m.secrets.SetSize(m.width, m.height)
 		return m, nil
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -137,14 +150,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.selectedProject = sel.name
-				return m, m.loadStacksCmd(sel.name)
+				m.loadingMsg = fmt.Sprintf("Loading stacks for %s…", sel.name)
+				m.screen = screenLoading
+				return m, tea.Batch(m.spinner.Tick, m.loadStacksCmd(sel.name))
 
 			case screenStacks:
 				sel, ok := m.stacks.SelectedItem().(stackItem)
 				if !ok {
 					return m, nil
 				}
-				return m, m.loadSecretsCmd(sel.info)
+				m.loadingMsg = fmt.Sprintf("Decrypting secrets for %s…", sel.info.Name)
+				m.screen = screenLoading
+				return m, tea.Batch(m.spinner.Tick, m.loadSecretsCmd(sel.info))
 
 			case screenSecrets:
 				sel, ok := m.secrets.SelectedItem().(secretItem)
@@ -164,6 +181,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 		}
+
+	case loadProjectsMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, tea.Quit
+		}
+		if len(msg.projects) == 0 {
+			m.err = fmt.Errorf("no projects found in bucket")
+			return m, tea.Quit
+		}
+		items := make([]list.Item, len(msg.projects))
+		for i, p := range msg.projects {
+			items[i] = projectItem{p}
+		}
+		m.projects.SetItems(items)
+		m.projects.SetSize(m.width, m.height)
+		m.screen = screenProjects
+		return m, nil
 
 	case loadStacksMsg:
 		if msg.err != nil {
@@ -205,20 +240,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.stacks, cmd = m.stacks.Update(msg)
 		return m, cmd
-	default:
+	case screenSecrets:
 		var cmd tea.Cmd
 		m.secrets, cmd = m.secrets.Update(msg)
 		return m, cmd
 	}
+	return m, nil
 }
 
 func (m Model) View() string {
 	if m.err != nil {
-		return fmt.Sprintf("error: %v\n", m.err)
+		return fmt.Sprintf("\n  error: %v\n", m.err)
 	}
-	help := helpStyle.Render("↑/↓ navigate • enter select • esc back • q quit")
 	wrap := lipgloss.NewStyle().Margin(1, 2)
+	help := helpStyle.Render("↑/↓ navigate • enter select • esc back • q quit")
+
 	switch m.screen {
+	case screenLoading:
+		return wrap.Render(
+			m.spinner.View() + " " + loadingStyle.Render(m.loadingMsg),
+		)
 	case screenProjects:
 		return wrap.Render(m.projects.View() + "\n" + help)
 	case screenStacks:
@@ -231,13 +272,17 @@ func (m Model) View() string {
 func (m Model) Result() string { return m.result }
 func (m Model) Err() error     { return m.err }
 
+func (m Model) listProjectsCmd() tea.Cmd {
+	return func() tea.Msg {
+		projects, err := m.s3.ListProjects(m.ctx)
+		return loadProjectsMsg{projects: projects, err: err}
+	}
+}
+
 func (m Model) loadStacksCmd(project string) tea.Cmd {
 	return func() tea.Msg {
 		stacks, err := m.s3.ListStacks(m.ctx, project)
-		if err != nil {
-			return loadStacksMsg{err: err}
-		}
-		return loadStacksMsg{stacks: stacks}
+		return loadStacksMsg{stacks: stacks, err: err}
 	}
 }
 
