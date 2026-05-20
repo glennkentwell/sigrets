@@ -35,26 +35,19 @@ func (s *S3Store) Close() error {
 }
 
 func (s *S3Store) ListProjects(ctx context.Context) ([]string, error) {
-	iter := s.bucket.List(nil)
-	seen := map[string]struct{}{}
+	const pulumiDir = "/.pulumi/"
+	iter := s.bucket.List(&blob.ListOptions{Delimiter: pulumiDir})
 	var projects []string
 	for {
 		obj, err := iter.Next(ctx)
 		if err != nil {
 			break
 		}
-		const marker = "/.pulumi/stacks/"
-		idx := strings.Index(obj.Key, marker)
-		if idx < 0 {
+		if !obj.IsDir {
 			continue
 		}
-		suffix := obj.Key[idx+len(marker):]
-		if !strings.HasSuffix(suffix, ".json") || strings.HasSuffix(suffix, ".json.bak") {
-			continue
-		}
-		project := obj.Key[:idx]
-		if _, ok := seen[project]; !ok {
-			seen[project] = struct{}{}
+		project := strings.TrimSuffix(obj.Key, pulumiDir)
+		if project != "" {
 			projects = append(projects, project)
 		}
 	}
