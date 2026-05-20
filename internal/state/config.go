@@ -3,26 +3,10 @@ package state
 import (
 	"encoding/json"
 	"fmt"
-
-	"gopkg.in/yaml.v3"
 )
 
-type StackConfig struct {
-	SecretsProvider string                     `yaml:"secretsprovider,omitempty"`
-	EncryptedKey    string                     `yaml:"encryptedkey,omitempty"`
-	Config          map[string]yaml.Node       `yaml:"config,omitempty"`
-}
-
-type ConfigSecret struct {
-	Secure string `yaml:"secure"`
-}
-
-func ParseStackConfig(data []byte) (*StackConfig, error) {
-	var cfg StackConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing stack config: %w", err)
-	}
-	return &cfg, nil
+type HistoryRecord struct {
+	Config map[string]json.RawMessage `json:"config"`
 }
 
 func ParseStackState(data []byte) (*StackState, error) {
@@ -33,17 +17,27 @@ func ParseStackState(data []byte) (*StackState, error) {
 	return &s, nil
 }
 
-func ExtractConfigSecrets(cfg *StackConfig) []Secret {
+func ParseHistoryRecord(data []byte) (*HistoryRecord, error) {
+	var h HistoryRecord
+	if err := json.Unmarshal(data, &h); err != nil {
+		return nil, fmt.Errorf("parsing history record: %w", err)
+	}
+	return &h, nil
+}
+
+func ExtractHistorySecrets(h *HistoryRecord) []Secret {
 	var secrets []Secret
-	for key, node := range cfg.Config {
-		var cs ConfigSecret
-		if err := node.Decode(&cs); err != nil || cs.Secure == "" {
+	for key, raw := range h.Config {
+		var obj struct {
+			Secure string `json:"secure"`
+		}
+		if err := json.Unmarshal(raw, &obj); err != nil || obj.Secure == "" {
 			continue
 		}
 		secrets = append(secrets, Secret{
 			Name:       key,
 			Source:     "config",
-			Ciphertext: cs.Secure,
+			Ciphertext: obj.Secure,
 		})
 	}
 	return secrets

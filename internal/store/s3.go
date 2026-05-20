@@ -10,17 +10,15 @@ import (
 )
 
 type S3Store struct {
-	bucket  *blob.Bucket
-	project string
+	bucket *blob.Bucket
 }
 
 type StackInfo struct {
-	Name      string
-	StateKey  string
-	ConfigKey string
+	Name     string
+	StateKey string
 }
 
-func NewS3Store(ctx context.Context, bucketName, project, region, profile string) (*S3Store, error) {
+func NewS3Store(ctx context.Context, bucketName, region, profile string) (*S3Store, error) {
 	url := fmt.Sprintf("s3://%s?region=%s&awssdk=v2", bucketName, region)
 	if profile != "" {
 		url += "&profile=" + profile
@@ -29,16 +27,36 @@ func NewS3Store(ctx context.Context, bucketName, project, region, profile string
 	if err != nil {
 		return nil, fmt.Errorf("opening s3 bucket %s: %w", bucketName, err)
 	}
-	return &S3Store{bucket: b, project: project}, nil
+	return &S3Store{bucket: b}, nil
 }
 
 func (s *S3Store) Close() error {
 	return s.bucket.Close()
 }
 
-func (s *S3Store) ListStacks(ctx context.Context) ([]StackInfo, error) {
-	prefix := s.project + "/.pulumi/stacks/"
-	iter := s.bucket.List(&blob.ListOptions{Prefix: prefix})
+func (s *S3Store) ListProjects(ctx context.Context) ([]string, error) {
+	const pulumiDir = "/.pulumi/"
+	iter := s.bucket.List(&blob.ListOptions{Delimiter: pulumiDir})
+	var projects []string
+	for {
+		obj, err := iter.Next(ctx)
+		if err != nil {
+			break
+		}
+		if !obj.IsDir {
+			continue
+		}
+		project := strings.TrimSuffix(obj.Key, pulumiDir)
+		if project != "" {
+			projects = append(projects, project)
+		}
+	}
+	return projects, nil
+}
+
+func (s *S3Store) ListStacks(ctx context.Context, project string) ([]StackInfo, error) {
+	prefix := project + "/.pulumi/stacks/"
+	iter := s.bucket.List(&blob.ListOptions{Prefix: prefix, Delimiter: "/"})
 
 	var stacks []StackInfo
 	for {
@@ -53,9 +71,8 @@ func (s *S3Store) ListStacks(ctx context.Context) ([]StackInfo, error) {
 		name := strings.TrimPrefix(key, prefix)
 		name = strings.TrimSuffix(name, ".json")
 		stacks = append(stacks, StackInfo{
-			Name:      name,
-			StateKey:  key,
-			ConfigKey: s.project + "/Pulumi." + name + ".yaml",
+			Name:     name,
+			StateKey: key,
 		})
 	}
 	return stacks, nil
@@ -69,15 +86,26 @@ func (s *S3Store) ReadState(ctx context.Context, stateKey string) ([]byte, error
 	return data, nil
 }
 
-func (s *S3Store) ReadConfig(ctx context.Context, configKey string) ([]byte, error) {
-	data, err := s.bucket.ReadAll(ctx, configKey)
-	if err != nil {
-		return nil, fmt.Errorf("reading config %s: %w", configKey, err)
+func (s *S3Store) LatestHistoryKey(ctx context.Context, project, stack string) string {
+	prefix := project + "/.pulumi/history/" + stack + "/"
+	iter := s.bucket.List(&blob.ListOptions{Prefix: prefix})
+	latest := ""
+	for {
+		obj, err := iter.Next(ctx)
+		if err != nil {
+			break
+		}
+		if strings.HasSuffix(obj.Key, ".history.json") {
+			latest = obj.Key
+		}
 	}
-	return data, nil
+	return latest
 }
 
-func (s *S3Store) HasConfig(ctx context.Context, configKey string) bool {
-	exists, _ := s.bucket.Exists(ctx, configKey)
-	return exists
+func (s *S3Store) ReadBytes(ctx context.Context, key string) ([]byte, error) {
+	data, err := s.bucket.ReadAll(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", key, err)
+	}
+	return data, nil
 }

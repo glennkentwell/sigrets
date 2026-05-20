@@ -1,0 +1,35 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: build
+        run: |
+          mkdir dist
+          GOOS=darwin  GOARCH=arm64  go build -ldflags="-s -w" -o dist/sigrets-darwin-arm64  .
+          GOOS=darwin  GOARCH=amd64  go build -ldflags="-s -w" -o dist/sigrets-darwin-amd64  .
+          GOOS=linux   GOARCH=amd64  go build -ldflags="-s -w" -o dist/sigrets-linux-amd64   .
+          GOOS=linux   GOARCH=arm64  go build -ldflags="-s -w" -o dist/sigrets-linux-arm64   .
+
+      - name: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* \
+            --title "${{ github.ref_name }}" \
+            --generate-notes

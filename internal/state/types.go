@@ -1,14 +1,19 @@
 package state
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
-// StackState is the top-level structure of a Pulumi stack state file.
 type StackState struct {
 	Version    int        `json:"version"`
-	Deployment Deployment `json:"deployment"`
+	Checkpoint Checkpoint `json:"checkpoint"`
 }
 
-// Deployment contains the live state snapshot.
+type Checkpoint struct {
+	Latest *Deployment `json:"latest"`
+}
+
 type Deployment struct {
 	SecretsProviders *SecretsProvider `json:"secrets_providers"`
 	Resources        []Resource       `json:"resources"`
@@ -58,4 +63,22 @@ type Secret struct {
 	Ciphertext string
 	// Value is the decrypted plaintext (populated after decryption).
 	Value string
+}
+
+func ExtractCloudState(s *StackState) (CloudSecretsState, error) {
+	if s.Checkpoint.Latest == nil {
+		return CloudSecretsState{}, fmt.Errorf("stack has no deployment (empty checkpoint)")
+	}
+	sp := s.Checkpoint.Latest.SecretsProviders
+	if sp == nil {
+		return CloudSecretsState{}, fmt.Errorf("stack has no secrets provider")
+	}
+	if sp.Type != "cloud" {
+		return CloudSecretsState{}, fmt.Errorf("unsupported secrets provider %q (only \"cloud\"/KMS supported)", sp.Type)
+	}
+	var cs CloudSecretsState
+	if err := json.Unmarshal(sp.State, &cs); err != nil {
+		return CloudSecretsState{}, fmt.Errorf("parsing cloud secrets state: %w", err)
+	}
+	return cs, nil
 }
