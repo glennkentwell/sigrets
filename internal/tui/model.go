@@ -88,6 +88,7 @@ type Model struct {
 	plaintext       string
 	revealed        bool
 	copied          bool
+	copiedCmd       bool
 	decr            *crypto.Decryptor
 	result          string
 	err             error
@@ -174,6 +175,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.screen = screenSecrets
 				m.revealed = false
 				m.copied = false
+				m.copiedCmd = false
 				m.plaintext = ""
 				m.selectedSecret = nil
 				return m, nil
@@ -187,6 +189,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.screen == screenDetail && m.plaintext != "" {
 				err := clipboard.WriteAll(m.plaintext)
 				m.copied = err == nil
+				return m, nil
+			}
+		case "c":
+			if m.screen == screenDetail {
+				s := m.selectedSecret
+				sourceShort := "o"
+				if s.Source == "config" {
+					sourceShort = "c"
+				}
+				path := m.selectedStack + "." + sourceShort + "." + s.Name
+				cmd := "sigrets " + m.selectedProject + " " + path
+				err := clipboard.WriteAll(cmd)
+				m.copiedCmd = err == nil
 				return m, nil
 			}
 		case "enter":
@@ -220,6 +235,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedSecret = &s
 				m.revealed = false
 				m.copied = false
+				m.copiedCmd = false
 				if s.Ciphertext == "" {
 					m.plaintext = s.Value
 				} else {
@@ -379,6 +395,10 @@ func (m Model) viewDetail() string {
 	if m.copied {
 		copiedNote = "  " + copiedStyle.Render("✓ copied")
 	}
+	copiedCmdNote := ""
+	if m.copiedCmd {
+		copiedCmdNote = "  " + copiedStyle.Render("✓ copied")
+	}
 
 	card := lipgloss.JoinVertical(lipgloss.Left,
 		detailLabelStyle.Render("path"),
@@ -391,7 +411,8 @@ func (m Model) viewDetail() string {
 		valueRow,
 		"",
 		dimStyle.Render(eyeHint),
-		dimStyle.Render("y — copy to clipboard"+copiedNote),
+		dimStyle.Render("y — copy value to clipboard"+copiedNote),
+		dimStyle.Render("c — copy command to clipboard"+copiedCmdNote),
 		dimStyle.Render("enter — print & exit"),
 		dimStyle.Render("esc — back"),
 	)
