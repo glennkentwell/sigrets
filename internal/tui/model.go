@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -435,7 +434,7 @@ func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
 			}
 		}
 
-		cloudState, err := extractCloudState(stackState)
+		cloudState, err := state.ExtractCloudState(stackState)
 		if err != nil {
 			return loadSecretsMsg{err: err}
 		}
@@ -449,20 +448,4 @@ func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
 	}
 }
 
-func extractCloudState(stackState *state.StackState) (state.CloudSecretsState, error) {
-	if stackState.Checkpoint.Latest == nil {
-		return state.CloudSecretsState{}, fmt.Errorf("stack has no deployment (empty checkpoint)")
-	}
-	sp := stackState.Checkpoint.Latest.SecretsProviders
-	if sp == nil {
-		return state.CloudSecretsState{}, fmt.Errorf("stack has no secrets provider")
-	}
-	if sp.Type != "cloud" {
-		return state.CloudSecretsState{}, fmt.Errorf("unsupported secrets provider %q (only \"cloud\"/KMS supported)", sp.Type)
-	}
-	var cs state.CloudSecretsState
-	if err := json.Unmarshal(sp.State, &cs); err != nil {
-		return state.CloudSecretsState{}, fmt.Errorf("parsing cloud secrets state: %w", err)
-	}
-	return cs, nil
-}
+

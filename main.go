@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -189,7 +188,7 @@ func runDirect(ctx context.Context, s3 *store.S3Store, project, arg string) {
 		os.Exit(1)
 	}
 
-	cloudState, err := extractCloudState(stackState)
+	cloudState, err := state.ExtractCloudState(stackState)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -263,24 +262,6 @@ func parseGetArg(arg string) (stackName, source, secretName string, err error) {
 		return "", "", "", fmt.Errorf("invalid source %q: use o/out/output or c/cfg/config", parts[1])
 	}
 	return
-}
-
-func extractCloudState(stackState *state.StackState) (state.CloudSecretsState, error) {
-	if stackState.Checkpoint.Latest == nil {
-		return state.CloudSecretsState{}, fmt.Errorf("stack has no deployment (empty checkpoint)")
-	}
-	sp := stackState.Checkpoint.Latest.SecretsProviders
-	if sp == nil {
-		return state.CloudSecretsState{}, fmt.Errorf("stack has no secrets provider")
-	}
-	if sp.Type != "cloud" {
-		return state.CloudSecretsState{}, fmt.Errorf("unsupported secrets provider %q (only \"cloud\"/KMS supported)", sp.Type)
-	}
-	var cs state.CloudSecretsState
-	if err := json.Unmarshal(sp.State, &cs); err != nil {
-		return state.CloudSecretsState{}, fmt.Errorf("parsing cloud secrets state: %w", err)
-	}
-	return cs, nil
 }
 
 // fuzzyMatchProject returns the best matching project from the list given a query.
