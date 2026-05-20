@@ -76,4 +76,4 @@ Pulumi uses envelope encryption for secrets in S3-backed state:
 
 Config secrets (`pulumi config set --secret`) are read from the latest history file at `<project>/.pulumi/history/<stack>/`.
 
-No Pulumi CLI, no Pulumi state API, no service tokens.
+You don't need the full Pulumi CLI or the local Pulumi stack config YAML files, you can just rawdog AWS S3 and KMS :dog:    

@@ -292,7 +292,6 @@ func fuzzyMatchProject(query string, projects []string) string {
 			return p
 		}
 	}
-	// substring match on last segment (e.g. "acc" matches "cloud/accounts")
 	for _, p := range projects {
 		seg := p
 		if i := strings.LastIndex(p, "/"); i >= 0 {
