@@ -8,9 +8,7 @@ import (
 )
 
 type StackConfig struct {
-	SecretsProvider string                     `yaml:"secretsprovider,omitempty"`
-	EncryptedKey    string                     `yaml:"encryptedkey,omitempty"`
-	Config          map[string]yaml.Node       `yaml:"config,omitempty"`
+	Config map[string]yaml.Node `yaml:"config,omitempty"`
 }
 
 type ConfigSecret struct {

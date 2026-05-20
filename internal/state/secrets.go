@@ -31,7 +31,10 @@ func ParseRawSecret(raw json.RawMessage) (RawSecret, error) {
 
 func ExtractOutputSecrets(state *StackState) []Secret {
 	var secrets []Secret
-	for _, r := range state.Deployment.Resources {
+	if state.Checkpoint.Latest == nil {
+		return secrets
+	}
+	for _, r := range state.Checkpoint.Latest.Resources {
 		if r.Type != "pulumi:pulumi:Stack" {
 			continue
 		}

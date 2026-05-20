@@ -2,13 +2,15 @@ package state
 
 import "encoding/json"
 
-// StackState is the top-level structure of a Pulumi stack state file.
 type StackState struct {
 	Version    int        `json:"version"`
-	Deployment Deployment `json:"deployment"`
+	Checkpoint Checkpoint `json:"checkpoint"`
 }
 
-// Deployment contains the live state snapshot.
+type Checkpoint struct {
+	Latest *Deployment `json:"latest"`
+}
+
 type Deployment struct {
 	SecretsProviders *SecretsProvider `json:"secrets_providers"`
 	Resources        []Resource       `json:"resources"`

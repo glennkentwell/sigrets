@@ -231,7 +231,10 @@ func parseGetArg(arg string) (stackName, source, secretName string, err error) {
 }
 
 func extractCloudState(stackState *state.StackState) (state.CloudSecretsState, error) {
-	sp := stackState.Deployment.SecretsProviders
+	if stackState.Checkpoint.Latest == nil {
+		return state.CloudSecretsState{}, fmt.Errorf("stack has no deployment (empty checkpoint)")
+	}
+	sp := stackState.Checkpoint.Latest.SecretsProviders
 	if sp == nil {
 		return state.CloudSecretsState{}, fmt.Errorf("stack has no secrets provider")
 	}
