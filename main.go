@@ -19,7 +19,6 @@ import (
 type config struct {
 	bucket       string
 	bucketSource string
-	project      string
 	region       string
 	profile      string
 }
@@ -29,30 +28,21 @@ func main() {
 
 	ctx := context.Background()
 
-	// no args → TUI
-	if len(flag.Args()) == 0 {
+	switch len(flag.Args()) {
+	case 0:
+		// no args → TUI
 		s3 := mustOpenStore(ctx, c)
 		runTUI(ctx, s3, c)
-		return
-	}
 
-	arg := flag.Arg(0)
-
-	// looks like a path → direct get
-	if strings.Count(arg, ".") >= 2 {
-		if c.project == "" {
-			fmt.Fprintln(os.Stderr, "error: --project is required for direct get")
-			os.Exit(1)
-		}
+	case 2:
 		s3 := mustOpenStore(ctx, c)
 		defer s3.Close()
-		runDirect(ctx, s3, c.project, arg)
-		return
-	}
+		runDirect(ctx, s3, flag.Arg(0), flag.Arg(1))
 
-	// unknown
-	fmt.Fprintf(os.Stderr, "usage: sigrets [stackName.{o|c}.secretName]\n       sigrets (no args) → TUI\n")
-	os.Exit(1)
+	default:
+		fmt.Fprintln(os.Stderr, "usage: sigrets [projectFuzzy stackName.{o|c}.secretName]")
+		os.Exit(1)
+	}
 }
 
 func parseFlags() config {
@@ -60,14 +50,13 @@ func parseFlags() config {
 
 	flag.StringVar(&c.bucket, "bucket", "", "S3 bucket name")
 	flag.StringVar(&c.bucket, "b", "", "S3 bucket name (shorthand)")
-	flag.StringVar(&c.project, "project", os.Getenv("SIGRETS_PROJECT"), "Pulumi project path prefix (optional for TUI)")
-	flag.StringVar(&c.project, "p", os.Getenv("SIGRETS_PROJECT"), "Pulumi project path prefix (shorthand)")
 	flag.StringVar(&c.region, "region", envOrDefault("SIGRETS_REGION", envOrDefault("AWS_DEFAULT_REGION", "ap-southeast-2")), "AWS region")
 	flag.StringVar(&c.region, "r", envOrDefault("SIGRETS_REGION", envOrDefault("AWS_DEFAULT_REGION", "ap-southeast-2")), "AWS region (shorthand)")
 	flag.StringVar(&c.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS named profile")
 	flag.Parse()
 
 	c.bucket, c.bucketSource = resolveBucket(c.bucket)
+	c.profile = resolveProfile(c.profile)
 	return c
 }
 
@@ -81,7 +70,6 @@ func resolveBucket(flagVal string) (bucket, source string) {
 	if f, err := cfg.Load(); err == nil && f.Bucket != "" {
 		return f.Bucket, cfg.Path()
 	}
-	// prompt
 	fmt.Fprint(os.Stderr, "S3 bucket name: ")
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Scan()
@@ -90,13 +78,43 @@ func resolveBucket(flagVal string) (bucket, source string) {
 		fmt.Fprintln(os.Stderr, "bucket name required")
 		os.Exit(1)
 	}
-	f := &cfg.File{Bucket: v}
+	saveConfig(func(f *cfg.File) { f.Bucket = v })
+	return v, "prompt"
+}
+
+func resolveProfile(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	if v := os.Getenv("AWS_PROFILE"); v != "" {
+		return v
+	}
+	if f, err := cfg.Load(); err == nil && f.Profile != "" {
+		return f.Profile
+	}
+	fmt.Fprint(os.Stderr, "AWS profile name: ")
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	v := strings.TrimSpace(scanner.Text())
+	if v == "" {
+		fmt.Fprintln(os.Stderr, "AWS profile name required")
+		os.Exit(1)
+	}
+	saveConfig(func(f *cfg.File) { f.Profile = v })
+	return v
+}
+
+func saveConfig(update func(*cfg.File)) {
+	f, err := cfg.Load()
+	if err != nil {
+		f = &cfg.File{}
+	}
+	update(f)
 	if err := cfg.Save(f); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not save config: %v\n", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "saved bucket to %s\n", cfg.Path())
+		fmt.Fprintf(os.Stderr, "saved to %s\n", cfg.Path())
 	}
-	return v, "prompt"
 }
 
 func mustOpenStore(ctx context.Context, c config) *store.S3Store {

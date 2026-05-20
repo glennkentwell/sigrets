@@ -7,7 +7,8 @@ import (
 )
 
 type File struct {
-	Bucket string `json:"bucket"`
+	Bucket  string `json:"bucket"`
+	Profile string `json:"profile,omitempty"`
 }
 
 func path() (string, error) {

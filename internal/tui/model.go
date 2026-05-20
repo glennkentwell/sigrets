@@ -328,6 +328,7 @@ func (m Model) viewDetail() string {
 		sourceShort = "c"
 	}
 	path := m.selectedStack + "." + sourceShort + "." + s.Name
+	cmd := "sigrets " + m.selectedProject + " " + path
 
 	valueWidth := m.width - 8
 	if valueWidth < 20 {
@@ -356,6 +357,9 @@ func (m Model) viewDetail() string {
 	card := lipgloss.JoinVertical(lipgloss.Left,
 		detailLabelStyle.Render("path"),
 		pathStyle.Render(path),
+		"",
+		detailLabelStyle.Render("command"),
+		pathStyle.Render(cmd),
 		"",
 		detailLabelStyle.Render("value"),
 		valueRow,
