@@ -1,4 +1,4 @@
-# sigrets :cigarette:
+# sigrets 🚬
 
 Read Pulumi secrets from S3 state without the Pulumi CLI.
 
