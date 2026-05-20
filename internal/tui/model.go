@@ -93,9 +93,10 @@ type Model struct {
 	err             error
 	width           int
 	height          int
+	bucketSource    string
 }
 
-func New(ctx context.Context, s3 *store.S3Store) Model {
+func New(ctx context.Context, s3 *store.S3Store, bucketSource string) Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = spinnerStyle
@@ -113,14 +114,15 @@ func New(ctx context.Context, s3 *store.S3Store) Model {
 	secretList.Styles.Title = titleStyle
 
 	return Model{
-		ctx:        ctx,
-		s3:         s3,
-		screen:     screenLoading,
-		loadingMsg: "Scanning bucket for projects…",
-		spinner:    sp,
-		projects:   projectList,
-		stacks:     stackList,
-		secrets:    secretList,
+		ctx:          ctx,
+		s3:           s3,
+		screen:       screenLoading,
+		loadingMsg:   "Scanning bucket for projects…",
+		spinner:      sp,
+		projects:     projectList,
+		stacks:       stackList,
+		secrets:      secretList,
+		bucketSource: bucketSource,
 	}
 }
 
@@ -244,6 +246,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.projects.SetItems(items)
 		m.projects.SetSize(m.width, m.height)
+		m.projects.Title = "Select a project  " + dimStyle.Render("(bucket from: "+m.bucketSource+")")
 		m.screen = screenProjects
 		return m, nil
 

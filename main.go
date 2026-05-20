@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"glenn.io/sigrets/internal/cfg"
 	"glenn.io/sigrets/internal/crypto"
 	"glenn.io/sigrets/internal/state"
 	"glenn.io/sigrets/internal/store"
@@ -16,60 +18,95 @@ import (
 )
 
 type config struct {
-	bucket  string
-	project string
-	region  string
-	profile string
+	bucket       string
+	bucketSource string
+	project      string
+	region       string
+	profile      string
 }
 
 func main() {
-	cfg := parseFlags()
-
-	if len(flag.Args()) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: sigrets get [stackName.{o|c}.secretName]")
-		os.Exit(1)
-	}
-
-	if flag.Arg(0) != "get" {
-		fmt.Fprintf(os.Stderr, "unknown command %q\n", flag.Arg(0))
-		os.Exit(1)
-	}
+	c := parseFlags()
 
 	ctx := context.Background()
 
-	s3, err := store.NewS3Store(ctx, cfg.bucket, cfg.region, cfg.profile)
+	// no args → TUI
+	if len(flag.Args()) == 0 {
+		s3 := mustOpenStore(ctx, c)
+		runTUI(ctx, s3, c)
+		return
+	}
+
+	arg := flag.Arg(0)
+
+	// looks like a path → direct get
+	if strings.Count(arg, ".") >= 2 {
+		if c.project == "" {
+			fmt.Fprintln(os.Stderr, "error: --project is required for direct get")
+			os.Exit(1)
+		}
+		s3 := mustOpenStore(ctx, c)
+		defer s3.Close()
+		runDirect(ctx, s3, c.project, arg)
+		return
+	}
+
+	// unknown
+	fmt.Fprintf(os.Stderr, "usage: sigrets [stackName.{o|c}.secretName]\n       sigrets (no args) → TUI\n")
+	os.Exit(1)
+}
+
+func parseFlags() config {
+	var c config
+
+	flag.StringVar(&c.bucket, "bucket", "", "S3 bucket name")
+	flag.StringVar(&c.bucket, "b", "", "S3 bucket name (shorthand)")
+	flag.StringVar(&c.project, "project", os.Getenv("SIGRETS_PROJECT"), "Pulumi project path prefix (optional for TUI)")
+	flag.StringVar(&c.project, "p", os.Getenv("SIGRETS_PROJECT"), "Pulumi project path prefix (shorthand)")
+	flag.StringVar(&c.region, "region", envOrDefault("SIGRETS_REGION", envOrDefault("AWS_DEFAULT_REGION", "ap-southeast-2")), "AWS region")
+	flag.StringVar(&c.region, "r", envOrDefault("SIGRETS_REGION", envOrDefault("AWS_DEFAULT_REGION", "ap-southeast-2")), "AWS region (shorthand)")
+	flag.StringVar(&c.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS named profile")
+	flag.Parse()
+
+	c.bucket, c.bucketSource = resolveBucket(c.bucket)
+	return c
+}
+
+func resolveBucket(flagVal string) (bucket, source string) {
+	if flagVal != "" {
+		return flagVal, "flag"
+	}
+	if v := os.Getenv("SIGRETS_BUCKET"); v != "" {
+		return v, "SIGRETS_BUCKET env"
+	}
+	if f, err := cfg.Load(); err == nil && f.Bucket != "" {
+		return f.Bucket, cfg.Path()
+	}
+	// prompt
+	fmt.Fprint(os.Stderr, "S3 bucket name: ")
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	v := strings.TrimSpace(scanner.Text())
+	if v == "" {
+		fmt.Fprintln(os.Stderr, "bucket name required")
+		os.Exit(1)
+	}
+	f := &cfg.File{Bucket: v}
+	if err := cfg.Save(f); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not save config: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "saved bucket to %s\n", cfg.Path())
+	}
+	return v, "prompt"
+}
+
+func mustOpenStore(ctx context.Context, c config) *store.S3Store {
+	s3, err := store.NewS3Store(ctx, c.bucket, c.region, c.profile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer s3.Close()
-
-	if flag.Arg(1) == "" {
-		runTUI(ctx, s3)
-		return
-	}
-
-	if cfg.project == "" {
-		fmt.Fprintln(os.Stderr, "error: --project is required for direct get (or omit the path argument to use the TUI)")
-		os.Exit(1)
-	}
-	runDirect(ctx, s3, cfg.project, flag.Arg(1))
-}
-
-func parseFlags() config {
-	var cfg config
-
-	const defaultBucket = "my-pulumi-state"
-	flag.StringVar(&cfg.bucket, "bucket", envOrDefault("SIGRETS_BUCKET", defaultBucket), "S3 bucket name")
-	flag.StringVar(&cfg.bucket, "b", envOrDefault("SIGRETS_BUCKET", defaultBucket), "S3 bucket name (shorthand)")
-	flag.StringVar(&cfg.project, "project", os.Getenv("SIGRETS_PROJECT"), "Pulumi project path prefix (optional for TUI)")
-	flag.StringVar(&cfg.project, "p", os.Getenv("SIGRETS_PROJECT"), "Pulumi project path prefix (shorthand)")
-	flag.StringVar(&cfg.region, "region", envOrDefault("SIGRETS_REGION", envOrDefault("AWS_DEFAULT_REGION", "ap-southeast-2")), "AWS region")
-	flag.StringVar(&cfg.region, "r", envOrDefault("SIGRETS_REGION", envOrDefault("AWS_DEFAULT_REGION", "ap-southeast-2")), "AWS region (shorthand)")
-	flag.StringVar(&cfg.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS named profile")
-	flag.Parse()
-
-	return cfg
+	return s3
 }
 
 func envOrDefault(key, def string) string {
@@ -79,8 +116,8 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
-func runTUI(ctx context.Context, s3 *store.S3Store) {
-	m := tui.New(ctx, s3)
+func runTUI(ctx context.Context, s3 *store.S3Store, c config) {
+	m := tui.New(ctx, s3, c.bucketSource)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
@@ -99,13 +136,29 @@ func runTUI(ctx context.Context, s3 *store.S3Store) {
 }
 
 func runDirect(ctx context.Context, s3 *store.S3Store, project, arg string) {
+	defer s3.Close()
+
 	stackName, source, secretName, err := parseGetArg(arg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	stacks, err := s3.ListStacks(ctx, project)
+	projects, err := s3.ListProjects(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	resolved := fuzzyMatchProject(project, projects)
+	if resolved == "" {
+		fmt.Fprintf(os.Stderr, "project not found: %q\n", project)
+		os.Exit(1)
+	}
+	if resolved != project {
+		fmt.Fprintf(os.Stderr, "using project: %s\n", resolved)
+	}
+
+	stacks, err := s3.ListStacks(ctx, resolved)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -149,12 +202,11 @@ func runDirect(ctx context.Context, s3 *store.S3Store, project, arg string) {
 	}
 
 	var candidates []state.Secret
-
 	switch source {
 	case "output":
 		candidates = state.ExtractOutputSecrets(stackState)
 	case "config":
-		histKey := s3.LatestHistoryKey(ctx, project, stackName)
+		histKey := s3.LatestHistoryKey(ctx, resolved, stackName)
 		if histKey == "" {
 			fmt.Fprintln(os.Stderr, "no history file found for stack")
 			os.Exit(1)
@@ -229,4 +281,33 @@ func extractCloudState(stackState *state.StackState) (state.CloudSecretsState, e
 		return state.CloudSecretsState{}, fmt.Errorf("parsing cloud secrets state: %w", err)
 	}
 	return cs, nil
+}
+
+// fuzzyMatchProject returns the best matching project from the list given a query.
+// Exact match wins; otherwise falls back to substring match on the last path segment
+// then full path. Returns "" if nothing matches.
+func fuzzyMatchProject(query string, projects []string) string {
+	query = strings.ToLower(query)
+	for _, p := range projects {
+		if strings.ToLower(p) == query {
+			return p
+		}
+	}
+	// substring match on last segment (e.g. "acc" matches "cloud/accounts")
+	for _, p := range projects {
+		seg := p
+		if i := strings.LastIndex(p, "/"); i >= 0 {
+			seg = p[i+1:]
+		}
+		if strings.Contains(strings.ToLower(seg), query) {
+			return p
+		}
+	}
+	// substring match on full path
+	for _, p := range projects {
+		if strings.Contains(strings.ToLower(p), query) {
+			return p
+		}
+	}
+	return ""
 }
