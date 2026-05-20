@@ -37,7 +37,7 @@ func main() {
 	case 2:
 		s3 := mustOpenStore(ctx, c)
 		defer s3.Close()
-		runDirect(ctx, s3, flag.Arg(0), flag.Arg(1))
+		runDirect(ctx, s3, c.profile, flag.Arg(0), flag.Arg(1))
 
 	default:
 		fmt.Fprintln(os.Stderr, "usage: sigrets [projectFuzzy stackName.{o|c}.secretName]")
@@ -134,7 +134,7 @@ func envOrDefault(key, def string) string {
 }
 
 func runTUI(ctx context.Context, s3 *store.S3Store, c config) {
-	m := tui.New(ctx, s3, c.bucketSource)
+	m := tui.New(ctx, s3, c.bucketSource, c.profile)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
@@ -152,7 +152,7 @@ func runTUI(ctx context.Context, s3 *store.S3Store, c config) {
 	}
 }
 
-func runDirect(ctx context.Context, s3 *store.S3Store, project, arg string) {
+func runDirect(ctx context.Context, s3 *store.S3Store, profile, project, arg string) {
 	defer s3.Close()
 
 	stackName, source, secretName, err := parseGetArg(arg)
@@ -212,7 +212,7 @@ func runDirect(ctx context.Context, s3 *store.S3Store, project, arg string) {
 		os.Exit(1)
 	}
 
-	decr, err := crypto.NewDecryptor(ctx, cloudState.URL, cloudState.EncryptedKey)
+	decr, err := crypto.NewDecryptor(ctx, cloudState.URL, cloudState.EncryptedKey, profile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

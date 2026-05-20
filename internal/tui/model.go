@@ -23,6 +23,7 @@ const (
 	screenStacks
 	screenSecrets
 	screenDetail
+	screenError
 )
 
 type projectItem struct{ name string }
@@ -90,12 +91,15 @@ type Model struct {
 	decr            *crypto.Decryptor
 	result          string
 	err             error
+	errMsg          string
+	errBack         screen
 	width           int
 	height          int
 	bucketSource    string
+	profile         string
 }
 
-func New(ctx context.Context, s3 *store.S3Store, bucketSource string) Model {
+func New(ctx context.Context, s3 *store.S3Store, bucketSource, profile string) Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = spinnerStyle
@@ -122,6 +126,7 @@ func New(ctx context.Context, s3 *store.S3Store, bucketSource string) Model {
 		stacks:       stackList,
 		secrets:      secretList,
 		bucketSource: bucketSource,
+		profile:      profile,
 	}
 }
 
@@ -150,11 +155,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "q":
-			if m.screen != screenDetail {
+			if m.screen != screenDetail && m.screen != screenError {
 				return m, tea.Quit
 			}
 		case "esc", "b":
 			switch m.screen {
+			case screenError:
+				m.errMsg = ""
+				m.screen = m.errBack
+				return m, nil
 			case screenStacks:
 				m.screen = screenProjects
 				return m, nil
@@ -251,8 +260,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case loadStacksMsg:
 		if msg.err != nil {
-			m.err = msg.err
-			return m, tea.Quit
+			m.errMsg = msg.err.Error()
+			m.errBack = screenProjects
+			m.screen = screenError
+			return m, nil
 		}
 		items := make([]list.Item, len(msg.stacks))
 		for i, s := range msg.stacks {
@@ -266,8 +277,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case loadSecretsMsg:
 		if msg.err != nil {
-			m.err = msg.err
-			return m, tea.Quit
+			m.errMsg = msg.err.Error()
+			m.errBack = screenStacks
+			m.screen = screenError
+			return m, nil
 		}
 		m.decr = msg.decr
 		items := make([]list.Item, len(msg.secrets))
@@ -308,6 +321,19 @@ func (m Model) View() string {
 	switch m.screen {
 	case screenLoading:
 		return wrap.Render(m.spinner.View() + " " + loadingStyle.Render(m.loadingMsg))
+	case screenError:
+		card := lipgloss.JoinVertical(lipgloss.Left,
+			errorLabelStyle.Render("error"),
+			"",
+			errorMsgStyle.Render(m.errMsg),
+			"",
+			helpStyle.Render("esc — go back • ctrl+c — quit"),
+		)
+		cardWidth := m.width - 4
+		if cardWidth < 40 {
+			cardWidth = 40
+		}
+		return wrap.Render(detailCardStyle.Width(cardWidth).Render(card))
 	case screenProjects:
 		return wrap.Render(m.projects.View() + "\n" + help)
 	case screenStacks:
@@ -462,7 +488,7 @@ func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
 			return loadSecretsMsg{err: err}
 		}
 
-		decr, err := crypto.NewDecryptor(m.ctx, cloudState.URL, cloudState.EncryptedKey)
+		decr, err := crypto.NewDecryptor(m.ctx, cloudState.URL, cloudState.EncryptedKey, m.profile)
 		if err != nil {
 			return loadSecretsMsg{err: err}
 		}

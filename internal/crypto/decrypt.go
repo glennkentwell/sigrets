@@ -18,7 +18,14 @@ type Decryptor struct {
 	dataKey []byte
 }
 
-func NewDecryptor(ctx context.Context, kmsURL string, encryptedKey []byte) (*Decryptor, error) {
+func NewDecryptor(ctx context.Context, kmsURL string, encryptedKey []byte, profile string) (*Decryptor, error) {
+	if profile != "" {
+		sep := "?"
+		if strings.Contains(kmsURL, "?") {
+			sep = "&"
+		}
+		kmsURL += sep + "profile=" + profile + "&awssdk=v2"
+	}
 	keeper, err := secrets.OpenKeeper(ctx, kmsURL)
 	if err != nil {
 		return nil, fmt.Errorf("opening kms keeper: %w", err)

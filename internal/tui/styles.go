@@ -54,4 +54,11 @@ var (
 
 	copiedStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("82"))
+
+	errorLabelStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("196")).
+				Bold(true)
+
+	errorMsgStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252"))
 )
