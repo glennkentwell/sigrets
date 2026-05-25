@@ -9,10 +9,10 @@ type HistoryRecord struct {
 	Config map[string]json.RawMessage `json:"config"`
 }
 
-func ParseStackState(data []byte) (*StackState, error) {
-	var s StackState
+func ParseProjectState(data []byte) (*ProjectState, error) {
+	var s ProjectState
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("parsing stack state: %w", err)
+		return nil, fmt.Errorf("parsing project state: %w", err)
 	}
 	return &s, nil
 }

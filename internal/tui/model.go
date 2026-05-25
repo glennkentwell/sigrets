@@ -19,24 +19,24 @@ type screen int
 
 const (
 	screenLoading screen = iota
+	screenBackends
 	screenProjects
-	screenStacks
 	screenSecrets
 	screenDetail
 	screenError
 )
 
-type projectItem struct{ name string }
+type backendItem struct{ name string }
 
-func (i projectItem) Title() string       { return i.name }
-func (i projectItem) Description() string { return "" }
-func (i projectItem) FilterValue() string { return i.name }
+func (i backendItem) Title() string       { return i.name }
+func (i backendItem) Description() string { return "" }
+func (i backendItem) FilterValue() string { return i.name }
 
-type stackItem struct{ info store.StackInfo }
+type projectItem struct{ info store.ProjectInfo }
 
-func (i stackItem) Title() string       { return i.info.Name }
-func (i stackItem) Description() string { return dimStyle.Render(i.info.StateKey) }
-func (i stackItem) FilterValue() string { return i.info.Name }
+func (i projectItem) Title() string       { return i.info.Name }
+func (i projectItem) Description() string { return dimStyle.Render(i.info.StateKey) }
+func (i projectItem) FilterValue() string { return i.info.Name }
 
 type secretItem struct{ secret state.Secret }
 
@@ -50,14 +50,14 @@ func (i secretItem) Title() string {
 func (i secretItem) Description() string { return dimStyle.Render("press enter to view") }
 func (i secretItem) FilterValue() string  { return i.secret.Name }
 
-type loadProjectsMsg struct {
-	projects []string
+type loadBackendsMsg struct {
+	backends []string
 	err      error
 }
 
-type loadStacksMsg struct {
-	stacks []store.StackInfo
-	err    error
+type loadProjectsMsg struct {
+	projects []store.ProjectInfo
+	err      error
 }
 
 type loadSecretsMsg struct {
@@ -79,11 +79,11 @@ type Model struct {
 	screen          screen
 	loadingMsg      string
 	spinner         spinner.Model
+	backends        list.Model
 	projects        list.Model
-	stacks          list.Model
 	secrets         list.Model
+	selectedBackend string
 	selectedProject string
-	selectedStack   string
 	selectedSecret  *state.Secret
 	plaintext       string
 	revealed        bool
@@ -105,13 +105,13 @@ func New(ctx context.Context, s3 *store.S3Store, bucketSource, profile string) M
 	sp.Spinner = spinner.Dot
 	sp.Style = spinnerStyle
 
+	backendList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	backendList.Title = "Select a backend"
+	backendList.Styles.Title = titleStyle
+
 	projectList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	projectList.Title = "Select a project"
 	projectList.Styles.Title = titleStyle
-
-	stackList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
-	stackList.Title = "Select a stack"
-	stackList.Styles.Title = titleStyle
 
 	secretList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	secretList.Title = "Select a secret"
@@ -121,10 +121,10 @@ func New(ctx context.Context, s3 *store.S3Store, bucketSource, profile string) M
 		ctx:          ctx,
 		s3:           s3,
 		screen:       screenLoading,
-		loadingMsg:   "Scanning bucket for projects…",
+		loadingMsg:   "Scanning bucket for backends…",
 		spinner:      sp,
+		backends:     backendList,
 		projects:     projectList,
-		stacks:       stackList,
 		secrets:      secretList,
 		bucketSource: bucketSource,
 		profile:      profile,
@@ -132,7 +132,7 @@ func New(ctx context.Context, s3 *store.S3Store, bucketSource, profile string) M
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.listProjectsCmd())
+	return tea.Batch(m.spinner.Tick, m.listBackendsCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -141,8 +141,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h, v := lipgloss.NewStyle().Margin(1, 2).GetFrameSize()
 		m.width = msg.Width - h
 		m.height = msg.Height - v
+		m.backends.SetSize(m.width, m.height)
 		m.projects.SetSize(m.width, m.height)
-		m.stacks.SetSize(m.width, m.height)
 		m.secrets.SetSize(m.width, m.height)
 		return m, nil
 
@@ -165,11 +165,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.errMsg = ""
 				m.screen = m.errBack
 				return m, nil
-			case screenStacks:
-				m.screen = screenProjects
+			case screenProjects:
+				m.screen = screenBackends
 				return m, nil
 			case screenSecrets:
-				m.screen = screenStacks
+				m.screen = screenProjects
 				return m, nil
 			case screenDetail:
 				m.screen = screenSecrets
@@ -198,30 +198,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if s.Source == "config" {
 					sourceShort = "c"
 				}
-				path := m.selectedStack + "." + sourceShort + "." + s.Name
-				cmd := "sigrets " + m.selectedProject + " " + path
+				path := m.selectedProject + "." + sourceShort + "." + s.Name
+				cmd := "sigrets " + m.selectedBackend + " " + path
 				err := clipboard.WriteAll(cmd)
 				m.copiedCmd = err == nil
 				return m, nil
 			}
 		case "enter":
 			switch m.screen {
+			case screenBackends:
+				sel, ok := m.backends.SelectedItem().(backendItem)
+				if !ok {
+					return m, nil
+				}
+				m.selectedBackend = sel.name
+				m.loadingMsg = fmt.Sprintf("Loading projects for %s…", sel.name)
+				m.screen = screenLoading
+				return m, tea.Batch(m.spinner.Tick, m.loadProjectsCmd(sel.name))
+
 			case screenProjects:
 				sel, ok := m.projects.SelectedItem().(projectItem)
 				if !ok {
 					return m, nil
 				}
-				m.selectedProject = sel.name
-				m.loadingMsg = fmt.Sprintf("Loading stacks for %s…", sel.name)
-				m.screen = screenLoading
-				return m, tea.Batch(m.spinner.Tick, m.loadStacksCmd(sel.name))
-
-			case screenStacks:
-				sel, ok := m.stacks.SelectedItem().(stackItem)
-				if !ok {
-					return m, nil
-				}
-				m.selectedStack = sel.info.Name
+				m.selectedProject = sel.info.Name
 				m.loadingMsg = fmt.Sprintf("Decrypting secrets for %s…", sel.info.Name)
 				m.screen = screenLoading
 				return m, tea.Batch(m.spinner.Tick, m.loadSecretsCmd(sel.info))
@@ -255,14 +255,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case loadProjectsMsg:
+	case loadBackendsMsg:
 		if msg.err != nil {
 			m.err = msg.err
 			return m, tea.Quit
 		}
-		if len(msg.projects) == 0 {
-			m.err = fmt.Errorf("no projects found in bucket")
+		if len(msg.backends) == 0 {
+			m.err = fmt.Errorf("no backends found in bucket")
 			return m, tea.Quit
+		}
+		items := make([]list.Item, len(msg.backends))
+		for i, b := range msg.backends {
+			items[i] = backendItem{b}
+		}
+		m.backends.SetItems(items)
+		m.backends.SetSize(m.width, m.height)
+		m.backends.Title = "Select a backend  " + dimStyle.Render("(bucket from: "+m.bucketSource+")")
+		m.screen = screenBackends
+		return m, nil
+
+	case loadProjectsMsg:
+		if msg.err != nil {
+			m.errMsg = msg.err.Error()
+			m.errBack = screenBackends
+			m.screen = screenError
+			return m, nil
 		}
 		items := make([]list.Item, len(msg.projects))
 		for i, p := range msg.projects {
@@ -270,31 +287,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.projects.SetItems(items)
 		m.projects.SetSize(m.width, m.height)
-		m.projects.Title = "Select a project  " + dimStyle.Render("(bucket from: "+m.bucketSource+")")
+		m.projects.Title = "Select a project  " + dimStyle.Render("("+m.selectedBackend+")")
 		m.screen = screenProjects
-		return m, nil
-
-	case loadStacksMsg:
-		if msg.err != nil {
-			m.errMsg = msg.err.Error()
-			m.errBack = screenProjects
-			m.screen = screenError
-			return m, nil
-		}
-		items := make([]list.Item, len(msg.stacks))
-		for i, s := range msg.stacks {
-			items[i] = stackItem{s}
-		}
-		m.stacks.SetItems(items)
-		m.stacks.SetSize(m.width, m.height)
-		m.stacks.Title = "Select a stack  " + dimStyle.Render("("+m.selectedProject+")")
-		m.screen = screenStacks
 		return m, nil
 
 	case loadSecretsMsg:
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
-			m.errBack = screenStacks
+			m.errBack = screenProjects
 			m.screen = screenError
 			return m, nil
 		}
@@ -305,19 +305,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.secrets.SetItems(items)
 		m.secrets.SetSize(m.width, m.height)
-		m.secrets.Title = "Select a secret  " + dimStyle.Render("("+m.selectedStack+")")
+		m.secrets.Title = "Select a secret  " + dimStyle.Render("("+m.selectedProject+")")
 		m.screen = screenSecrets
 		return m, nil
 	}
 
 	switch m.screen {
+	case screenBackends:
+		var cmd tea.Cmd
+		m.backends, cmd = m.backends.Update(msg)
+		return m, cmd
 	case screenProjects:
 		var cmd tea.Cmd
 		m.projects, cmd = m.projects.Update(msg)
-		return m, cmd
-	case screenStacks:
-		var cmd tea.Cmd
-		m.stacks, cmd = m.stacks.Update(msg)
 		return m, cmd
 	case screenSecrets:
 		var cmd tea.Cmd
@@ -350,10 +350,10 @@ func (m Model) View() string {
 			cardWidth = 40
 		}
 		return wrap.Render(detailCardStyle.Width(cardWidth).Render(card))
+	case screenBackends:
+		return wrap.Render(m.backends.View() + "\n" + help)
 	case screenProjects:
 		return wrap.Render(m.projects.View() + "\n" + help)
-	case screenStacks:
-		return wrap.Render(m.stacks.View() + "\n" + help)
 	case screenSecrets:
 		return wrap.Render(m.secrets.View() + "\n" + help)
 	case screenDetail:
@@ -369,8 +369,8 @@ func (m Model) viewDetail() string {
 	if s.Source == "config" {
 		sourceShort = "c"
 	}
-	path := m.selectedStack + "." + sourceShort + "." + s.Name
-	cmd := "sigrets " + m.selectedProject + " " + path
+	path := m.selectedProject + "." + sourceShort + "." + s.Name
+	cmd := "sigrets " + m.selectedBackend + " " + path
 
 	valueWidth := m.width - 8
 	if valueWidth < 20 {
@@ -449,21 +449,21 @@ func min(a, b int) int {
 	return b
 }
 
-func (m Model) listProjectsCmd() tea.Cmd {
+func (m Model) listBackendsCmd() tea.Cmd {
 	return func() tea.Msg {
-		projects, err := m.s3.ListProjects(m.ctx)
+		backends, err := m.s3.ListBackends(m.ctx)
+		return loadBackendsMsg{backends: backends, err: err}
+	}
+}
+
+func (m Model) loadProjectsCmd(backend string) tea.Cmd {
+	return func() tea.Msg {
+		projects, err := m.s3.ListProjects(m.ctx, backend)
 		return loadProjectsMsg{projects: projects, err: err}
 	}
 }
 
-func (m Model) loadStacksCmd(project string) tea.Cmd {
-	return func() tea.Msg {
-		stacks, err := m.s3.ListStacks(m.ctx, project)
-		return loadStacksMsg{stacks: stacks, err: err}
-	}
-}
-
-func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
+func (m Model) loadSecretsCmd(info store.ProjectInfo) tea.Cmd {
 	return func() tea.Msg {
 		type stateResult struct {
 			data []byte
@@ -481,7 +481,7 @@ func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
 			stateCh <- stateResult{data, err}
 		}()
 		go func() {
-			histCh <- histResult{m.s3.LatestHistoryKey(m.ctx, m.selectedProject, info.Name)}
+			histCh <- histResult{m.s3.LatestHistoryKey(m.ctx, m.selectedBackend, info.Name)}
 		}()
 
 		sr := <-stateCh
@@ -489,12 +489,12 @@ func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
 			return loadSecretsMsg{err: sr.err}
 		}
 
-		stackState, err := state.ParseStackState(sr.data)
+		projectState, err := state.ParseProjectState(sr.data)
 		if err != nil {
 			return loadSecretsMsg{err: err}
 		}
 
-		secrets := state.ExtractOutputSecrets(stackState)
+		secrets := state.ExtractOutputSecrets(projectState)
 
 		if histKey := (<-histCh).key; histKey != "" {
 			if histData, err := m.s3.ReadBytes(m.ctx, histKey); err == nil {
@@ -504,7 +504,7 @@ func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
 			}
 		}
 
-		cloudState, err := state.ExtractCloudState(stackState)
+		cloudState, err := state.ExtractCloudState(projectState)
 		if err != nil {
 			return loadSecretsMsg{err: err}
 		}
@@ -517,5 +517,3 @@ func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
 		return loadSecretsMsg{secrets: secrets, decr: decr}
 	}
 }
-
-

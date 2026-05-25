@@ -1,12 +1,12 @@
 # sigrets — Spec & Todo
 
-> Pulumi secret reader for S3-backed stacks. No Pulumi CLI required.
+> Pulumi secret reader for S3-backed projects. No Pulumi CLI required.
 
 ---
 
 ## What it does
 
-`sigrets` reads Pulumi stack state files directly from S3, decrypts secrets using AWS KMS, and presents them as plaintext — either via a single CLI command or an interactive TUI.
+`sigrets` reads Pulumi project state files directly from S3, decrypts secrets using AWS KMS, and presents them as plaintext — either via a single CLI command or an interactive TUI.
 
 ---
 
@@ -45,11 +45,11 @@ plaintext secret value (JSON-encoded)
 
 ```
 s3://<bucket>/
-  <project>/.pulumi/stacks/<stack>.json     ← state file
-  <project>/.pulumi/stacks/<stack>.json.bak ← previous checkpoint (ignore)
+  <backend>/.pulumi/stacks/<project>.json     ← state file
+  <backend>/.pulumi/stacks/<project>.json.bak ← previous checkpoint (ignore)
 ```
 
-State files live under project-scoped paths. The bucket name and project are configured via flags or a config file.
+State files live under backend-scoped paths. The bucket name and backend are configured via flags or a config file.
 
 ---
 
@@ -80,9 +80,10 @@ sigrets get
 ```
 
 Launches a TUI:
-1. **Stack list** — lists all stacks found in S3 (filtered to `.json`, excluding `.bak`)
-2. **Secret list** — after selecting a stack, shows all secrets (outputs + config combined, labelled by type)
-3. **Copy / print** — selecting a secret prints it to stdout and exits
+1. **Backend list** — lists all backends found in S3
+2. **Project list** — after selecting a backend, lists all projects (filtered to `.json`, excluding `.bak`)
+3. **Secret list** — after selecting a project, shows all secrets (outputs + config combined, labelled by type)
+4. **Copy / print** — selecting a secret prints it to stdout and exits
 
 ### Global flags
 
@@ -115,11 +116,11 @@ sigrets/
 │   │   ├── config.go              ← Pulumi.<stack>.yaml struct + parsing
 │   │   └── secrets.go             ← secret detection, extraction helpers
 │   ├── store/
-│   │   └── s3.go                  ← S3 reader: list stacks, read state, read config
+│   │   └── s3.go                  ← S3 reader: list backends, list projects, read state, read config
 │   ├── crypto/
 │   │   └── decrypt.go             ← KMS data key decrypt + AES-256-GCM symmetric decrypt
 │   └── tui/
-│       ├── model.go               ← bubbletea model (stack list → secret list)
+│       ├── model.go               ← bubbletea model (backend list → project list → secret list)
 │       └── styles.go              ← lipgloss styles
 └── SPEC.md
 ```
@@ -128,10 +129,10 @@ sigrets/
 
 ## Key types
 
-### State file (`<stack>.json`)
+### State file (`<project>.json`)
 
 ```go
-type StackState struct {
+type ProjectState struct {
     Version    int        `json:"version"`
     Deployment Deployment `json:"deployment"`
 }
@@ -218,10 +219,10 @@ The decrypted bytes are a JSON-encoded value (string, number, etc.) — unmarsha
 ## TUI behaviour
 
 - Built with `charmbracelet/bubbletea` + `charmbracelet/bubbles` list component
-- Two-screen flow: **stack select** → **secret select**
+- Three-screen flow: **backend select** → **project select** → **secret select**
 - `↑`/`↓` or `j`/`k` to navigate
 - `Enter` to select
-- `Esc` / `b` to go back (from secret list to stack list)
+- `Esc` / `b` to go back (from secret list to project list, or project list to backend list)
 - `q` / `ctrl+c` to quit
 - On secret selected: program exits, prints plaintext to stdout
 - Secrets labelled: `[output] name` or `[config] project:name`
@@ -234,7 +235,7 @@ The decrypted bytes are a JSON-encoded value (string, number, etc.) — unmarsha
 - S3 read failure → stderr + exit 1
 - KMS decrypt failure → stderr + exit 1 (likely auth issue)
 - Secret not found → stderr `"secret not found: <path>"` + exit 1
-- State has no `secrets_providers` → stderr `"stack has no secrets provider"` + exit 1
+- State has no `secrets_providers` → stderr `"project has no secrets provider"` + exit 1
 
 ---
 
@@ -242,9 +243,9 @@ The decrypted bytes are a JSON-encoded value (string, number, etc.) — unmarsha
 
 - [ ] **internal/state/types.go** — Pulumi state + config structs
 - [ ] **internal/state/secrets.go** — `IsSecret()`, `ExtractSecrets()` from resources + config
-- [ ] **internal/store/s3.go** — `ListStacks()`, `ReadState()`, `ReadConfig()` using `gocloud.dev/blob/s3blob`
+- [ ] **internal/store/s3.go** — `ListBackends()`, `ListProjects()`, `ReadState()`, `ReadConfig()` using `gocloud.dev/blob/s3blob`
 - [ ] **internal/crypto/decrypt.go** — `NewDecryptor(kmsURL, encryptedKey)`, `Decrypt(ciphertext)`
-- [ ] **internal/tui/model.go** — bubbletea model: stack list → secret list → output + quit
+- [ ] **internal/tui/model.go** — bubbletea model: backend list → project list → secret list → output + quit
 - [ ] **internal/tui/styles.go** — lipgloss styling
 - [ ] **main.go** — flag parsing (`--bucket`, `--project`, `--region`, `--profile`), dispatch to TUI or direct get
 - [ ] **Build verification** — `go build ./...` clean

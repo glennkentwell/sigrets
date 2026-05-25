@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-type StackState struct {
+type ProjectState struct {
 	Version    int        `json:"version"`
 	Checkpoint Checkpoint `json:"checkpoint"`
 }
@@ -19,7 +19,7 @@ type Deployment struct {
 	Resources        []Resource       `json:"resources"`
 }
 
-// SecretsProvider describes the encryption backend used for this stack.
+// SecretsProvider describes the encryption backend used for this project.
 type SecretsProvider struct {
 	Type  string          `json:"type"`  // "cloud", "passphrase", "service"
 	State json.RawMessage `json:"state"` // provider-specific state
@@ -65,13 +65,13 @@ type Secret struct {
 	Value string
 }
 
-func ExtractCloudState(s *StackState) (CloudSecretsState, error) {
+func ExtractCloudState(s *ProjectState) (CloudSecretsState, error) {
 	if s.Checkpoint.Latest == nil {
-		return CloudSecretsState{}, fmt.Errorf("stack has no deployment (empty checkpoint)")
+		return CloudSecretsState{}, fmt.Errorf("project has no deployment (empty checkpoint)")
 	}
 	sp := s.Checkpoint.Latest.SecretsProviders
 	if sp == nil {
-		return CloudSecretsState{}, fmt.Errorf("stack has no secrets provider")
+		return CloudSecretsState{}, fmt.Errorf("project has no secrets provider")
 	}
 	if sp.Type != "cloud" {
 		return CloudSecretsState{}, fmt.Errorf("unsupported secrets provider %q (only \"cloud\"/KMS supported)", sp.Type)

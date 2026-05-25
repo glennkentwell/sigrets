@@ -40,7 +40,7 @@ func main() {
 		runDirect(ctx, s3, c.profile, flag.Arg(0), flag.Arg(1))
 
 	default:
-		fmt.Fprintln(os.Stderr, "usage: sigrets [projectFuzzy stackName.{o|c}.secretName]")
+		fmt.Fprintln(os.Stderr, "usage: sigrets [backendFuzzy projectName.{o|c}.secretName]")
 		os.Exit(1)
 	}
 }
@@ -152,45 +152,45 @@ func runTUI(ctx context.Context, s3 *store.S3Store, c config) {
 	}
 }
 
-func runDirect(ctx context.Context, s3 *store.S3Store, profile, project, arg string) {
+func runDirect(ctx context.Context, s3 *store.S3Store, profile, backend, arg string) {
 	defer s3.Close()
 
-	stackName, source, secretName, err := parseGetArg(arg)
+	projectName, source, secretName, err := parseGetArg(arg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	projects, err := s3.ListProjects(ctx)
+	backends, err := s3.ListBackends(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	resolved := fuzzyMatchProject(project, projects)
+	resolved := fuzzyMatchBackend(backend, backends)
 	if resolved == "" {
-		fmt.Fprintf(os.Stderr, "project not found: %q\n", project)
+		fmt.Fprintf(os.Stderr, "backend not found: %q\n", backend)
 		os.Exit(1)
 	}
-	if resolved != project {
-		fmt.Fprintf(os.Stderr, "using project: %s\n", resolved)
+	if resolved != backend {
+		fmt.Fprintf(os.Stderr, "using backend: %s\n", resolved)
 	}
 
-	stacks, err := s3.ListStacks(ctx, resolved)
+	projects, err := s3.ListProjects(ctx, resolved)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	var target *store.StackInfo
-	for _, s := range stacks {
-		if s.Name == stackName {
-			s := s
-			target = &s
+	var target *store.ProjectInfo
+	for _, p := range projects {
+		if p.Name == projectName {
+			p := p
+			target = &p
 			break
 		}
 	}
 	if target == nil {
-		fmt.Fprintf(os.Stderr, "stack not found: %q\n", stackName)
+		fmt.Fprintf(os.Stderr, "project not found: %q\n", projectName)
 		os.Exit(1)
 	}
 
@@ -200,13 +200,13 @@ func runDirect(ctx context.Context, s3 *store.S3Store, profile, project, arg str
 		os.Exit(1)
 	}
 
-	stackState, err := state.ParseStackState(stateData)
+	projectState, err := state.ParseProjectState(stateData)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	cloudState, err := state.ExtractCloudState(stackState)
+	cloudState, err := state.ExtractCloudState(projectState)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -221,11 +221,11 @@ func runDirect(ctx context.Context, s3 *store.S3Store, profile, project, arg str
 	var candidates []state.Secret
 	switch source {
 	case "output":
-		candidates = state.ExtractOutputSecrets(stackState)
+		candidates = state.ExtractOutputSecrets(projectState)
 	case "config":
-		histKey := s3.LatestHistoryKey(ctx, resolved, stackName)
+		histKey := s3.LatestHistoryKey(ctx, resolved, projectName)
 		if histKey == "" {
-			fmt.Fprintln(os.Stderr, "no history file found for stack")
+			fmt.Fprintln(os.Stderr, "no history file found for project")
 			os.Exit(1)
 		}
 		histData, err := s3.ReadBytes(ctx, histKey)
@@ -264,12 +264,12 @@ func printSecret(decr *crypto.Decryptor, s state.Secret) {
 	fmt.Print(plaintext)
 }
 
-func parseGetArg(arg string) (stackName, source, secretName string, err error) {
+func parseGetArg(arg string) (projectName, source, secretName string, err error) {
 	parts := strings.SplitN(arg, ".", 3)
 	if len(parts) != 3 {
-		return "", "", "", fmt.Errorf("invalid path %q: expected stackName.{o|c}.secretName", arg)
+		return "", "", "", fmt.Errorf("invalid path %q: expected projectName.{o|c}.secretName", arg)
 	}
-	stackName = parts[0]
+	projectName = parts[0]
 	secretName = parts[2]
 	switch strings.ToLower(parts[1]) {
 	case "o", "out", "output":
@@ -282,29 +282,29 @@ func parseGetArg(arg string) (stackName, source, secretName string, err error) {
 	return
 }
 
-// fuzzyMatchProject returns the best matching project from the list given a query.
+// fuzzyMatchBackend returns the best matching backend from the list given a query.
 // Exact match wins; otherwise falls back to substring match on the last path segment
 // then full path. Returns "" if nothing matches.
-func fuzzyMatchProject(query string, projects []string) string {
+func fuzzyMatchBackend(query string, backends []string) string {
 	query = strings.ToLower(query)
-	for _, p := range projects {
-		if strings.ToLower(p) == query {
-			return p
+	for _, b := range backends {
+		if strings.ToLower(b) == query {
+			return b
 		}
 	}
-	for _, p := range projects {
-		seg := p
-		if i := strings.LastIndex(p, "/"); i >= 0 {
-			seg = p[i+1:]
+	for _, b := range backends {
+		seg := b
+		if i := strings.LastIndex(b, "/"); i >= 0 {
+			seg = b[i+1:]
 		}
 		if strings.Contains(strings.ToLower(seg), query) {
-			return p
+			return b
 		}
 	}
 	// substring match on full path
-	for _, p := range projects {
-		if strings.Contains(strings.ToLower(p), query) {
-			return p
+	for _, b := range backends {
+		if strings.Contains(strings.ToLower(b), query) {
+			return b
 		}
 	}
 	return ""

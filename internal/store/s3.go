@@ -13,7 +13,7 @@ type S3Store struct {
 	bucket *blob.Bucket
 }
 
-type StackInfo struct {
+type ProjectInfo struct {
 	Name     string
 	StateKey string
 }
@@ -34,10 +34,10 @@ func (s *S3Store) Close() error {
 	return s.bucket.Close()
 }
 
-func (s *S3Store) ListProjects(ctx context.Context) ([]string, error) {
+func (s *S3Store) ListBackends(ctx context.Context) ([]string, error) {
 	const pulumiDir = "/.pulumi/"
 	iter := s.bucket.List(&blob.ListOptions{Delimiter: pulumiDir})
-	var projects []string
+	var backends []string
 	for {
 		obj, err := iter.Next(ctx)
 		if err != nil {
@@ -46,19 +46,19 @@ func (s *S3Store) ListProjects(ctx context.Context) ([]string, error) {
 		if !obj.IsDir {
 			continue
 		}
-		project := strings.TrimSuffix(obj.Key, pulumiDir)
-		if project != "" {
-			projects = append(projects, project)
+		backend := strings.TrimSuffix(obj.Key, pulumiDir)
+		if backend != "" {
+			backends = append(backends, backend)
 		}
 	}
-	return projects, nil
+	return backends, nil
 }
 
-func (s *S3Store) ListStacks(ctx context.Context, project string) ([]StackInfo, error) {
-	prefix := project + "/.pulumi/stacks/"
+func (s *S3Store) ListProjects(ctx context.Context, backend string) ([]ProjectInfo, error) {
+	prefix := backend + "/.pulumi/stacks/"
 	iter := s.bucket.List(&blob.ListOptions{Prefix: prefix, Delimiter: "/"})
 
-	var stacks []StackInfo
+	var projects []ProjectInfo
 	for {
 		obj, err := iter.Next(ctx)
 		if err != nil {
@@ -70,12 +70,12 @@ func (s *S3Store) ListStacks(ctx context.Context, project string) ([]StackInfo, 
 		}
 		name := strings.TrimPrefix(key, prefix)
 		name = strings.TrimSuffix(name, ".json")
-		stacks = append(stacks, StackInfo{
+		projects = append(projects, ProjectInfo{
 			Name:     name,
 			StateKey: key,
 		})
 	}
-	return stacks, nil
+	return projects, nil
 }
 
 func (s *S3Store) ReadState(ctx context.Context, stateKey string) ([]byte, error) {
@@ -86,8 +86,8 @@ func (s *S3Store) ReadState(ctx context.Context, stateKey string) ([]byte, error
 	return data, nil
 }
 
-func (s *S3Store) LatestHistoryKey(ctx context.Context, project, stack string) string {
-	prefix := project + "/.pulumi/history/" + stack + "/"
+func (s *S3Store) LatestHistoryKey(ctx context.Context, backend, project string) string {
+	prefix := backend + "/.pulumi/history/" + project + "/"
 	iter := s.bucket.List(&blob.ListOptions{Prefix: prefix})
 	latest := ""
 	for {

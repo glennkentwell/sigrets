@@ -29,7 +29,7 @@ func ParseRawSecret(raw json.RawMessage) (RawSecret, error) {
 	return s, nil
 }
 
-func ExtractOutputSecrets(state *StackState) []Secret {
+func ExtractOutputSecrets(state *ProjectState) []Secret {
 	var secrets []Secret
 	if state.Checkpoint.Latest == nil {
 		return secrets
