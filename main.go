@@ -21,6 +21,7 @@ type config struct {
 	bucketSource string
 	region       string
 	profile      string
+	layout       string
 }
 
 func main() {
@@ -37,10 +38,12 @@ func main() {
 	case 2:
 		s3 := mustOpenStore(ctx, c)
 		defer s3.Close()
-		runDirect(ctx, s3, c.profile, flag.Arg(0), flag.Arg(1))
+		runDirect(ctx, s3, c, flag.Arg(0), flag.Arg(1))
 
 	default:
-		fmt.Fprintln(os.Stderr, "usage: sigrets [backendFuzzy project.stack.{o|c}.secretName]")
+		fmt.Fprintln(os.Stderr, "usage: sigrets [backendFuzzy path.to.secret]")
+		fmt.Fprintln(os.Stderr, "  flat layout:   stack.{o|c}.secretName")
+		fmt.Fprintln(os.Stderr, "  nested layout: project.stack.{o|c}.secretName")
 		os.Exit(1)
 	}
 }
@@ -53,10 +56,12 @@ func parseFlags() config {
 	flag.StringVar(&c.region, "region", envOrDefault("SIGRETS_REGION", envOrDefault("AWS_DEFAULT_REGION", "ap-southeast-2")), "AWS region")
 	flag.StringVar(&c.region, "r", envOrDefault("SIGRETS_REGION", envOrDefault("AWS_DEFAULT_REGION", "ap-southeast-2")), "AWS region (shorthand)")
 	flag.StringVar(&c.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS named profile")
+	flag.StringVar(&c.layout, "layout", "", "state layout: flat (backend→stack) or nested (backend→project→stack)")
 	flag.Parse()
 
 	c.bucket, c.bucketSource = resolveBucket(c.bucket)
 	c.profile = resolveProfile(c.profile)
+	c.layout = resolveLayout(c.layout)
 	return c
 }
 
@@ -104,6 +109,16 @@ func resolveProfile(flagVal string) string {
 	return v
 }
 
+func resolveLayout(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	if f, err := cfg.Load(); err == nil && f.Layout != "" {
+		return f.EffectiveLayout()
+	}
+	return cfg.LayoutFlat
+}
+
 func saveConfig(update func(*cfg.File)) {
 	f, err := cfg.Load()
 	if err != nil {
@@ -134,7 +149,7 @@ func envOrDefault(key, def string) string {
 }
 
 func runTUI(ctx context.Context, s3 *store.S3Store, c config) {
-	m := tui.New(ctx, s3, c.bucketSource, c.profile)
+	m := tui.New(ctx, s3, c.bucketSource, c.profile, c.layout)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
@@ -152,10 +167,18 @@ func runTUI(ctx context.Context, s3 *store.S3Store, c config) {
 	}
 }
 
-func runDirect(ctx context.Context, s3 *store.S3Store, profile, backend, arg string) {
+func runDirect(ctx context.Context, s3 *store.S3Store, c config, backend, arg string) {
 	defer s3.Close()
 
-	projectName, stackName, source, secretName, err := parseGetArg(arg)
+	nested := c.layout == cfg.LayoutNested
+
+	var projectName, stackName, source, secretName string
+	var err error
+	if nested {
+		projectName, stackName, source, secretName, err = parseNestedArg(arg)
+	} else {
+		stackName, source, secretName, err = parseFlatArg(arg)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -175,21 +198,23 @@ func runDirect(ctx context.Context, s3 *store.S3Store, profile, backend, arg str
 		fmt.Fprintf(os.Stderr, "using backend: %s\n", resolved)
 	}
 
-	projects, err := s3.ListProjects(ctx, resolved)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	found := false
-	for _, p := range projects {
-		if p == projectName {
-			found = true
-			break
+	if nested {
+		projects, err := s3.ListProjects(ctx, resolved)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
 		}
-	}
-	if !found {
-		fmt.Fprintf(os.Stderr, "project not found: %q\n", projectName)
-		os.Exit(1)
+		found := false
+		for _, p := range projects {
+			if p == projectName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintf(os.Stderr, "project not found: %q\n", projectName)
+			os.Exit(1)
+		}
 	}
 
 	stacks, err := s3.ListStacks(ctx, resolved, projectName)
@@ -228,7 +253,7 @@ func runDirect(ctx context.Context, s3 *store.S3Store, profile, backend, arg str
 		os.Exit(1)
 	}
 
-	decr, err := crypto.NewDecryptor(ctx, cloudState.URL, cloudState.EncryptedKey, profile)
+	decr, err := crypto.NewDecryptor(ctx, cloudState.URL, cloudState.EncryptedKey, c.profile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -280,7 +305,25 @@ func printSecret(decr *crypto.Decryptor, s state.Secret) {
 	fmt.Print(plaintext)
 }
 
-func parseGetArg(arg string) (project, stack, source, secretName string, err error) {
+func parseFlatArg(arg string) (stack, source, secretName string, err error) {
+	parts := strings.SplitN(arg, ".", 3)
+	if len(parts) != 3 {
+		return "", "", "", fmt.Errorf("invalid path %q: expected stack.{o|c}.secretName", arg)
+	}
+	stack = parts[0]
+	secretName = parts[2]
+	switch strings.ToLower(parts[1]) {
+	case "o", "out", "output":
+		source = "output"
+	case "c", "cfg", "config":
+		source = "config"
+	default:
+		return "", "", "", fmt.Errorf("invalid source %q: use o/out/output or c/cfg/config", parts[1])
+	}
+	return
+}
+
+func parseNestedArg(arg string) (project, stack, source, secretName string, err error) {
 	parts := strings.SplitN(arg, ".", 4)
 	if len(parts) != 4 {
 		return "", "", "", "", fmt.Errorf("invalid path %q: expected project.stack.{o|c}.secretName", arg)

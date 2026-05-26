@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"glenn.io/sigrets/internal/cfg"
 	"glenn.io/sigrets/internal/crypto"
 	"glenn.io/sigrets/internal/state"
 	"glenn.io/sigrets/internal/store"
@@ -81,6 +82,7 @@ type loadSecretsMsg struct {
 type Model struct {
 	ctx             context.Context
 	s3              *store.S3Store
+	layout          string
 	screen          screen
 	loadingMsg      string
 	spinner         spinner.Model
@@ -107,7 +109,7 @@ type Model struct {
 	profile         string
 }
 
-func New(ctx context.Context, s3 *store.S3Store, bucketSource, profile string) Model {
+func New(ctx context.Context, s3 *store.S3Store, bucketSource, profile, layout string) Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = spinnerStyle
@@ -131,6 +133,7 @@ func New(ctx context.Context, s3 *store.S3Store, bucketSource, profile string) M
 	return Model{
 		ctx:          ctx,
 		s3:           s3,
+		layout:       layout,
 		screen:       screenLoading,
 		loadingMsg:   "Scanning bucket for backends…",
 		spinner:      sp,
@@ -142,6 +145,8 @@ func New(ctx context.Context, s3 *store.S3Store, bucketSource, profile string) M
 		profile:      profile,
 	}
 }
+
+func (m Model) nested() bool { return m.layout == cfg.LayoutNested }
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, m.listBackendsCmd())
@@ -182,7 +187,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.screen = screenBackends
 				return m, nil
 			case screenStacks:
-				m.screen = screenProjects
+				if m.nested() {
+					m.screen = screenProjects
+				} else {
+					m.screen = screenBackends
+				}
 				return m, nil
 			case screenSecrets:
 				m.screen = screenStacks
@@ -214,7 +223,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if s.Source == "config" {
 					sourceShort = "c"
 				}
-				path := m.selectedProject + "." + m.selectedStack + "." + sourceShort + "." + s.Name
+				path := m.buildSecretPath(sourceShort, s.Name)
 				cmd := "sigrets " + m.selectedBackend + " " + path
 				err := clipboard.WriteAll(cmd)
 				m.copiedCmd = err == nil
@@ -228,9 +237,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.selectedBackend = sel.name
-				m.loadingMsg = fmt.Sprintf("Loading projects for %s…", sel.name)
+				if m.nested() {
+					m.loadingMsg = fmt.Sprintf("Loading projects for %s…", sel.name)
+					m.screen = screenLoading
+					return m, tea.Batch(m.spinner.Tick, m.loadProjectsCmd(sel.name))
+				}
+				m.loadingMsg = fmt.Sprintf("Loading stacks for %s…", sel.name)
 				m.screen = screenLoading
-				return m, tea.Batch(m.spinner.Tick, m.loadProjectsCmd(sel.name))
+				return m, tea.Batch(m.spinner.Tick, m.loadStacksCmd(""))
 
 			case screenProjects:
 				sel, ok := m.projects.SelectedItem().(projectItem)
@@ -325,14 +339,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case loadStacksMsg:
 		if msg.err != nil {
+			if m.nested() {
+				m.errBack = screenProjects
+			} else {
+				m.errBack = screenBackends
+			}
 			m.errMsg = msg.err.Error()
-			m.errBack = screenProjects
 			m.screen = screenError
 			return m, nil
 		}
 		if len(msg.stacks) == 0 {
-			m.errMsg = "no stacks found in project"
-			m.errBack = screenProjects
+			if m.nested() {
+				m.errBack = screenProjects
+			} else {
+				m.errBack = screenBackends
+			}
+			m.errMsg = "no stacks found"
 			m.screen = screenError
 			return m, nil
 		}
@@ -342,7 +364,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.stacks.SetItems(items)
 		m.stacks.SetSize(m.width, m.height)
-		m.stacks.Title = "Select a stack  " + dimStyle.Render("("+m.selectedProject+")")
+		titleCtx := m.selectedBackend
+		if m.nested() {
+			titleCtx = m.selectedProject
+		}
+		m.stacks.Title = "Select a stack  " + dimStyle.Render("("+titleCtx+")")
 		m.screen = screenStacks
 		return m, nil
 
@@ -423,6 +449,13 @@ func (m Model) View() string {
 	return ""
 }
 
+func (m Model) buildSecretPath(sourceShort, secretName string) string {
+	if m.nested() {
+		return m.selectedProject + "." + m.selectedStack + "." + sourceShort + "." + secretName
+	}
+	return m.selectedStack + "." + sourceShort + "." + secretName
+}
+
 func (m Model) viewDetail() string {
 	s := m.selectedSecret
 
@@ -430,7 +463,7 @@ func (m Model) viewDetail() string {
 	if s.Source == "config" {
 		sourceShort = "c"
 	}
-	path := m.selectedProject + "." + m.selectedStack + "." + sourceShort + "." + s.Name
+	path := m.buildSecretPath(sourceShort, s.Name)
 	cmd := "sigrets " + m.selectedBackend + " " + path
 
 	valueWidth := m.width - 8

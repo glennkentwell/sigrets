@@ -77,7 +77,10 @@ func (s *S3Store) ListProjects(ctx context.Context, backend string) ([]string, e
 }
 
 func (s *S3Store) ListStacks(ctx context.Context, backend, project string) ([]StackInfo, error) {
-	prefix := backend + "/.pulumi/stacks/" + project + "/"
+	prefix := backend + "/.pulumi/stacks/"
+	if project != "" {
+		prefix += project + "/"
+	}
 	iter := s.bucket.List(&blob.ListOptions{Prefix: prefix, Delimiter: "/"})
 
 	var stacks []StackInfo
@@ -109,7 +112,11 @@ func (s *S3Store) ReadState(ctx context.Context, stateKey string) ([]byte, error
 }
 
 func (s *S3Store) LatestHistoryKey(ctx context.Context, backend, project, stack string) string {
-	prefix := backend + "/.pulumi/history/" + project + "/" + stack + "/"
+	prefix := backend + "/.pulumi/history/"
+	if project != "" {
+		prefix += project + "/"
+	}
+	prefix += stack + "/"
 	iter := s.bucket.List(&blob.ListOptions{Prefix: prefix})
 	latest := ""
 	for {

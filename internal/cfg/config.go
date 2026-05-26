@@ -9,6 +9,19 @@ import (
 type File struct {
 	Bucket  string `json:"bucket"`
 	Profile string `json:"profile,omitempty"`
+	Layout  string `json:"layout,omitempty"`
+}
+
+const (
+	LayoutFlat   = "flat"
+	LayoutNested = "nested"
+)
+
+func (f *File) EffectiveLayout() string {
+	if f.Layout == LayoutNested {
+		return LayoutNested
+	}
+	return LayoutFlat
 }
 
 func path() (string, error) {
