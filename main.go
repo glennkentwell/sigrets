@@ -40,7 +40,7 @@ func main() {
 		runDirect(ctx, s3, c.profile, flag.Arg(0), flag.Arg(1))
 
 	default:
-		fmt.Fprintln(os.Stderr, "usage: sigrets [backendFuzzy projectName.{o|c}.secretName]")
+		fmt.Fprintln(os.Stderr, "usage: sigrets [backendFuzzy project.stack.{o|c}.secretName]")
 		os.Exit(1)
 	}
 }
@@ -155,7 +155,7 @@ func runTUI(ctx context.Context, s3 *store.S3Store, c config) {
 func runDirect(ctx context.Context, s3 *store.S3Store, profile, backend, arg string) {
 	defer s3.Close()
 
-	projectName, source, secretName, err := parseGetArg(arg)
+	projectName, stackName, source, secretName, err := parseGetArg(arg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -180,17 +180,33 @@ func runDirect(ctx context.Context, s3 *store.S3Store, profile, backend, arg str
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-
-	var target *store.ProjectInfo
+	found := false
 	for _, p := range projects {
-		if p.Name == projectName {
-			p := p
-			target = &p
+		if p == projectName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		fmt.Fprintf(os.Stderr, "project not found: %q\n", projectName)
+		os.Exit(1)
+	}
+
+	stacks, err := s3.ListStacks(ctx, resolved, projectName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	var target *store.StackInfo
+	for _, s := range stacks {
+		if s.Name == stackName {
+			s := s
+			target = &s
 			break
 		}
 	}
 	if target == nil {
-		fmt.Fprintf(os.Stderr, "project not found: %q\n", projectName)
+		fmt.Fprintf(os.Stderr, "stack not found: %q\n", stackName)
 		os.Exit(1)
 	}
 
@@ -223,9 +239,9 @@ func runDirect(ctx context.Context, s3 *store.S3Store, profile, backend, arg str
 	case "output":
 		candidates = state.ExtractOutputSecrets(projectState)
 	case "config":
-		histKey := s3.LatestHistoryKey(ctx, resolved, projectName)
+		histKey := s3.LatestHistoryKey(ctx, resolved, projectName, stackName)
 		if histKey == "" {
-			fmt.Fprintln(os.Stderr, "no history file found for project")
+			fmt.Fprintln(os.Stderr, "no history file found for stack")
 			os.Exit(1)
 		}
 		histData, err := s3.ReadBytes(ctx, histKey)
@@ -264,20 +280,21 @@ func printSecret(decr *crypto.Decryptor, s state.Secret) {
 	fmt.Print(plaintext)
 }
 
-func parseGetArg(arg string) (projectName, source, secretName string, err error) {
-	parts := strings.SplitN(arg, ".", 3)
-	if len(parts) != 3 {
-		return "", "", "", fmt.Errorf("invalid path %q: expected projectName.{o|c}.secretName", arg)
+func parseGetArg(arg string) (project, stack, source, secretName string, err error) {
+	parts := strings.SplitN(arg, ".", 4)
+	if len(parts) != 4 {
+		return "", "", "", "", fmt.Errorf("invalid path %q: expected project.stack.{o|c}.secretName", arg)
 	}
-	projectName = parts[0]
-	secretName = parts[2]
-	switch strings.ToLower(parts[1]) {
+	project = parts[0]
+	stack = parts[1]
+	secretName = parts[3]
+	switch strings.ToLower(parts[2]) {
 	case "o", "out", "output":
 		source = "output"
 	case "c", "cfg", "config":
 		source = "config"
 	default:
-		return "", "", "", fmt.Errorf("invalid source %q: use o/out/output or c/cfg/config", parts[1])
+		return "", "", "", "", fmt.Errorf("invalid source %q: use o/out/output or c/cfg/config", parts[2])
 	}
 	return
 }

@@ -21,6 +21,7 @@ const (
 	screenLoading screen = iota
 	screenBackends
 	screenProjects
+	screenStacks
 	screenSecrets
 	screenDetail
 	screenError
@@ -32,11 +33,17 @@ func (i backendItem) Title() string       { return i.name }
 func (i backendItem) Description() string { return "" }
 func (i backendItem) FilterValue() string { return i.name }
 
-type projectItem struct{ info store.ProjectInfo }
+type projectItem struct{ name string }
 
-func (i projectItem) Title() string       { return i.info.Name }
-func (i projectItem) Description() string { return dimStyle.Render(i.info.StateKey) }
-func (i projectItem) FilterValue() string { return i.info.Name }
+func (i projectItem) Title() string       { return i.name }
+func (i projectItem) Description() string { return "" }
+func (i projectItem) FilterValue() string { return i.name }
+
+type stackItem struct{ info store.StackInfo }
+
+func (i stackItem) Title() string       { return i.info.Name }
+func (i stackItem) Description() string { return dimStyle.Render(i.info.StateKey) }
+func (i stackItem) FilterValue() string { return i.info.Name }
 
 type secretItem struct{ secret state.Secret }
 
@@ -56,8 +63,13 @@ type loadBackendsMsg struct {
 }
 
 type loadProjectsMsg struct {
-	projects []store.ProjectInfo
+	projects []string
 	err      error
+}
+
+type loadStacksMsg struct {
+	stacks []store.StackInfo
+	err    error
 }
 
 type loadSecretsMsg struct {
@@ -65,13 +77,6 @@ type loadSecretsMsg struct {
 	decr    *crypto.Decryptor
 	err     error
 }
-
-type decryptedMsg struct {
-	plaintext string
-	err       error
-}
-
-type clipboardMsg struct{ err error }
 
 type Model struct {
 	ctx             context.Context
@@ -81,9 +86,11 @@ type Model struct {
 	spinner         spinner.Model
 	backends        list.Model
 	projects        list.Model
+	stacks          list.Model
 	secrets         list.Model
 	selectedBackend string
 	selectedProject string
+	selectedStack   string
 	selectedSecret  *state.Secret
 	plaintext       string
 	revealed        bool
@@ -113,6 +120,10 @@ func New(ctx context.Context, s3 *store.S3Store, bucketSource, profile string) M
 	projectList.Title = "Select a project"
 	projectList.Styles.Title = titleStyle
 
+	stackList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	stackList.Title = "Select a stack"
+	stackList.Styles.Title = titleStyle
+
 	secretList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	secretList.Title = "Select a secret"
 	secretList.Styles.Title = titleStyle
@@ -125,6 +136,7 @@ func New(ctx context.Context, s3 *store.S3Store, bucketSource, profile string) M
 		spinner:      sp,
 		backends:     backendList,
 		projects:     projectList,
+		stacks:       stackList,
 		secrets:      secretList,
 		bucketSource: bucketSource,
 		profile:      profile,
@@ -143,6 +155,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height - v
 		m.backends.SetSize(m.width, m.height)
 		m.projects.SetSize(m.width, m.height)
+		m.stacks.SetSize(m.width, m.height)
 		m.secrets.SetSize(m.width, m.height)
 		return m, nil
 
@@ -168,8 +181,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case screenProjects:
 				m.screen = screenBackends
 				return m, nil
-			case screenSecrets:
+			case screenStacks:
 				m.screen = screenProjects
+				return m, nil
+			case screenSecrets:
+				m.screen = screenStacks
 				return m, nil
 			case screenDetail:
 				m.screen = screenSecrets
@@ -198,7 +214,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if s.Source == "config" {
 					sourceShort = "c"
 				}
-				path := m.selectedProject + "." + sourceShort + "." + s.Name
+				path := m.selectedProject + "." + m.selectedStack + "." + sourceShort + "." + s.Name
 				cmd := "sigrets " + m.selectedBackend + " " + path
 				err := clipboard.WriteAll(cmd)
 				m.copiedCmd = err == nil
@@ -221,7 +237,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !ok {
 					return m, nil
 				}
-				m.selectedProject = sel.info.Name
+				m.selectedProject = sel.name
+				m.loadingMsg = fmt.Sprintf("Loading stacks for %s…", sel.name)
+				m.screen = screenLoading
+				return m, tea.Batch(m.spinner.Tick, m.loadStacksCmd(sel.name))
+
+			case screenStacks:
+				sel, ok := m.stacks.SelectedItem().(stackItem)
+				if !ok {
+					return m, nil
+				}
+				m.selectedStack = sel.info.Name
 				m.loadingMsg = fmt.Sprintf("Decrypting secrets for %s…", sel.info.Name)
 				m.screen = screenLoading
 				return m, tea.Batch(m.spinner.Tick, m.loadSecretsCmd(sel.info))
@@ -281,6 +307,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenError
 			return m, nil
 		}
+		if len(msg.projects) == 0 {
+			m.errMsg = "no projects found in backend"
+			m.errBack = screenBackends
+			m.screen = screenError
+			return m, nil
+		}
 		items := make([]list.Item, len(msg.projects))
 		for i, p := range msg.projects {
 			items[i] = projectItem{p}
@@ -291,10 +323,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenProjects
 		return m, nil
 
-	case loadSecretsMsg:
+	case loadStacksMsg:
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
 			m.errBack = screenProjects
+			m.screen = screenError
+			return m, nil
+		}
+		if len(msg.stacks) == 0 {
+			m.errMsg = "no stacks found in project"
+			m.errBack = screenProjects
+			m.screen = screenError
+			return m, nil
+		}
+		items := make([]list.Item, len(msg.stacks))
+		for i, s := range msg.stacks {
+			items[i] = stackItem{s}
+		}
+		m.stacks.SetItems(items)
+		m.stacks.SetSize(m.width, m.height)
+		m.stacks.Title = "Select a stack  " + dimStyle.Render("("+m.selectedProject+")")
+		m.screen = screenStacks
+		return m, nil
+
+	case loadSecretsMsg:
+		if msg.err != nil {
+			m.errMsg = msg.err.Error()
+			m.errBack = screenStacks
 			m.screen = screenError
 			return m, nil
 		}
@@ -305,7 +360,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.secrets.SetItems(items)
 		m.secrets.SetSize(m.width, m.height)
-		m.secrets.Title = "Select a secret  " + dimStyle.Render("("+m.selectedProject+")")
+		m.secrets.Title = "Select a secret  " + dimStyle.Render("("+m.selectedStack+")")
 		m.screen = screenSecrets
 		return m, nil
 	}
@@ -318,6 +373,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screenProjects:
 		var cmd tea.Cmd
 		m.projects, cmd = m.projects.Update(msg)
+		return m, cmd
+	case screenStacks:
+		var cmd tea.Cmd
+		m.stacks, cmd = m.stacks.Update(msg)
 		return m, cmd
 	case screenSecrets:
 		var cmd tea.Cmd
@@ -354,6 +413,8 @@ func (m Model) View() string {
 		return wrap.Render(m.backends.View() + "\n" + help)
 	case screenProjects:
 		return wrap.Render(m.projects.View() + "\n" + help)
+	case screenStacks:
+		return wrap.Render(m.stacks.View() + "\n" + help)
 	case screenSecrets:
 		return wrap.Render(m.secrets.View() + "\n" + help)
 	case screenDetail:
@@ -369,7 +430,7 @@ func (m Model) viewDetail() string {
 	if s.Source == "config" {
 		sourceShort = "c"
 	}
-	path := m.selectedProject + "." + sourceShort + "." + s.Name
+	path := m.selectedProject + "." + m.selectedStack + "." + sourceShort + "." + s.Name
 	cmd := "sigrets " + m.selectedBackend + " " + path
 
 	valueWidth := m.width - 8
@@ -463,7 +524,14 @@ func (m Model) loadProjectsCmd(backend string) tea.Cmd {
 	}
 }
 
-func (m Model) loadSecretsCmd(info store.ProjectInfo) tea.Cmd {
+func (m Model) loadStacksCmd(project string) tea.Cmd {
+	return func() tea.Msg {
+		stacks, err := m.s3.ListStacks(m.ctx, m.selectedBackend, project)
+		return loadStacksMsg{stacks: stacks, err: err}
+	}
+}
+
+func (m Model) loadSecretsCmd(info store.StackInfo) tea.Cmd {
 	return func() tea.Msg {
 		type stateResult struct {
 			data []byte
@@ -481,7 +549,7 @@ func (m Model) loadSecretsCmd(info store.ProjectInfo) tea.Cmd {
 			stateCh <- stateResult{data, err}
 		}()
 		go func() {
-			histCh <- histResult{m.s3.LatestHistoryKey(m.ctx, m.selectedBackend, info.Name)}
+			histCh <- histResult{m.s3.LatestHistoryKey(m.ctx, m.selectedBackend, m.selectedProject, info.Name)}
 		}()
 
 		sr := <-stateCh
